@@ -11,7 +11,7 @@
  * - Logs de atividade para analytics
  */
 
-import { MongoClient as MongoDriver, Db, Collection, Document, WithId, ObjectId } from 'mongodb';
+import { MongoClient as MongoDriver, Db, Collection, Document, WithId, ObjectId, BSON } from 'mongodb';
 
 // ==========================================
 // TIPOS
@@ -45,6 +45,20 @@ export interface BeerDocument extends Document {
   createdAt: Date;
   updatedAt: Date;
 }
+
+const BEER_SAFE_PROJECTION = {
+  _id: 1,
+  name: 1,
+  brewery: 1,
+  style: 1,
+  abv: 1,
+  ibu: 1,
+  image: 1,
+  country: 1,
+  createdBy: 1,
+  createdAt: 1,
+  updatedAt: 1,
+} as const;
 
 export interface ReviewDocument extends Document {
   _id: string;
@@ -107,6 +121,121 @@ class MongoDBClient {
   private db: Db | null = null;
   private connected = false;
 
+  private collectStringDiagnostics(value: unknown, path = 'root'): Array<Record<string, unknown>> {
+    if (typeof value === 'string') {
+      const sanitizedValue = this.sanitizeString(value);
+      return [{
+        path,
+        length: value.length,
+        changedBySanitizer: sanitizedValue !== value,
+        containsReplacementChar: sanitizedValue.includes('\uFFFD'),
+        preview: value.slice(0, 120),
+      }];
+    }
+
+    if (Array.isArray(value)) {
+      return value.flatMap((item, index) => this.collectStringDiagnostics(item, `${path}[${index}]`));
+    }
+
+    if (value instanceof Date || value instanceof ObjectId || value === null || value === undefined) {
+      return [];
+    }
+
+    if (typeof value === 'object') {
+      return Object.entries(value as Record<string, unknown>).flatMap(([key, nestedValue]) =>
+        this.collectStringDiagnostics(nestedValue, `${path}.${key}`)
+      );
+    }
+
+    return [];
+  }
+
+  private collectTopLevelBsonChecks(value: unknown): Array<Record<string, unknown>> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return [];
+    }
+
+    return Object.entries(value as Record<string, unknown>).map(([key, nestedValue]) => {
+      try {
+        BSON.serialize({ [key]: nestedValue });
+        return { path: `root.${key}`, serializable: true };
+      } catch (error) {
+        return {
+          path: `root.${key}`,
+          serializable: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    });
+  }
+
+  private sanitizeString(value: string): string {
+    const wellFormed = typeof value.toWellFormed === 'function' ? value.toWellFormed() : value;
+    return wellFormed.normalize('NFC');
+  }
+
+  private prepareDocumentForWrite<T>(value: T, context: string): T {
+    const sanitizedValue = this.sanitizeDocument(value);
+
+    try {
+      BSON.serialize(sanitizedValue);
+      return sanitizedValue;
+    } catch (error) {
+      console.error(`Invalid BSON payload for ${context}:`, error);
+      console.error(`BSON diagnostics for ${context}:`, {
+        stringFields: this.collectStringDiagnostics(sanitizedValue),
+        topLevelChecks: this.collectTopLevelBsonChecks(sanitizedValue),
+      });
+      throw new Error(`Invalid BSON payload for ${context}`);
+    }
+  }
+
+  private sanitizeDocument<T>(value: T): T {
+    if (typeof value === 'string') {
+      return this.sanitizeString(value) as T;
+    }
+
+    if (Array.isArray(value)) {
+      return value.map((item) => this.sanitizeDocument(item)) as T;
+    }
+
+    if (value instanceof Date || value instanceof ObjectId || value === null || value === undefined) {
+      return value;
+    }
+
+    if (typeof value === 'object') {
+      const entries = Object.entries(value as Record<string, unknown>).map(([key, itemValue]) => [
+        key,
+        this.sanitizeDocument(itemValue),
+      ]);
+
+      return Object.fromEntries(entries) as T;
+    }
+
+    return value;
+  }
+
+  private normalizeMongoUrl(url: string): string {
+    // Docker compose creates a root user in admin; ensure authSource is explicit.
+    if (!url || !url.startsWith('mongodb')) {
+      return url;
+    }
+
+    try {
+      const parsedUrl = new URL(url);
+      const hasCredentials = !!parsedUrl.username;
+      const hasAuthSource = parsedUrl.searchParams.has('authSource');
+
+      if (hasCredentials && !hasAuthSource) {
+        parsedUrl.searchParams.set('authSource', 'admin');
+      }
+
+      return parsedUrl.toString();
+    } catch {
+      return url;
+    }
+  }
+
   // Collections
   private users: Collection<UserDocument> | null = null;
   private beers: Collection<BeerDocument> | null = null;
@@ -116,7 +245,8 @@ class MongoDBClient {
   private conversations: Collection<ConversationDocument> | null = null;
 
   async connect(): Promise<void> {
-    const url = process.env.MONGODB_URL || 'mongodb://beersocial:beersocial123@localhost:27017/beersocial';
+    const rawUrl = process.env.MONGODB_URL || 'mongodb://beersocial:beersocial123@localhost:27017/beersocial';
+    const url = this.normalizeMongoUrl(rawUrl);
     const dbName = process.env.MONGODB_DB || 'beersocial';
 
     try {
@@ -211,9 +341,11 @@ class MongoDBClient {
       createdAt: now,
       updatedAt: now,
     };
-    
-    await this.users.insertOne(doc);
-    return doc;
+
+    const sanitizedDoc = this.prepareDocumentForWrite(doc, 'user');
+
+    await this.users.insertOne(sanitizedDoc);
+    return sanitizedDoc;
   }
 
   async getUserById(id: string): Promise<UserDocument | null> {
@@ -244,10 +376,12 @@ class MongoDBClient {
 
   async updateUser(id: string, updates: Partial<UserDocument>): Promise<boolean> {
     if (!this.users) throw new Error('MongoDB not connected');
+
+    const sanitizedUpdates = this.sanitizeDocument({ ...updates, updatedAt: new Date() });
     
     const result = await this.users.updateOne(
       { _id: id },
-      { $set: { ...updates, updatedAt: new Date() } }
+      { $set: sanitizedUpdates }
     );
     
     return result.modifiedCount > 0;
@@ -294,14 +428,30 @@ class MongoDBClient {
       createdAt: now,
       updatedAt: now,
     };
-    
-    await this.beers.insertOne(doc);
-    return doc;
+
+    const sanitizedDoc = this.prepareDocumentForWrite(doc, 'beer');
+
+    await this.beers.insertOne(sanitizedDoc);
+    return sanitizedDoc;
   }
 
   async getBeerById(id: string): Promise<BeerDocument | null> {
     if (!this.beers) throw new Error('MongoDB not connected');
-    return this.beers.findOne({ _id: id });
+
+    try {
+      return await this.beers.findOne({ _id: id });
+    } catch (error) {
+      console.warn('Falling back to safe beer projection after read error:', { id, error });
+      const fallbackBeer = await this.beers.findOne({ _id: id }, { projection: BEER_SAFE_PROJECTION });
+      if (!fallbackBeer) {
+        return null;
+      }
+
+      return {
+        ...fallbackBeer,
+        description: undefined,
+      } as BeerDocument;
+    }
   }
 
   async getBeers(filter: { search?: string; style?: string }, limit = 20, offset = 0): Promise<BeerDocument[]> {
@@ -322,6 +472,7 @@ class MongoDBClient {
     
     return this.beers
       .find(query)
+      .project(BEER_SAFE_PROJECTION)
       .sort({ createdAt: -1 })
       .skip(offset)
       .limit(limit)
@@ -331,7 +482,7 @@ class MongoDBClient {
  
   async getAllBeers(): Promise<BeerDocument[]> {
     if (!this.beers) throw new Error('MongoDB not connected');
-    return this.beers.find({}).sort({ createdAt: -1 }).toArray();
+    return this.beers.find({}).project(BEER_SAFE_PROJECTION).sort({ createdAt: -1 }).toArray();
   }
 
   async countBeers(filter: { search?: string; style?: string } = {}): Promise<number> {
@@ -374,9 +525,11 @@ class MongoDBClient {
       comments: [],
       likes: [],
     };
-    
-    await this.reviews.insertOne(doc);
-    return doc;
+
+    const sanitizedDoc = this.prepareDocumentForWrite(doc, 'review');
+
+    await this.reviews.insertOne(sanitizedDoc);
+    return sanitizedDoc;
   }
 
   async getReviewById(id: string): Promise<ReviewDocument | null> {
@@ -425,18 +578,19 @@ class MongoDBClient {
 
   async addComment(reviewId: string, comment: { userId: string; userName: string; userUsername?: string; content: string }): Promise<boolean> {
     if (!this.reviews) throw new Error('MongoDB not connected');
+
+    const sanitizedComment = this.prepareDocumentForWrite({
+      userId: comment.userId,
+      userName: comment.userName,
+      userUsername: comment.userUsername,
+      content: comment.content,
+      createdAt: new Date(),
+    }, 'review comment');
     
     const result = await this.reviews.updateOne(
       { _id: reviewId },
       {
-        $push: { comments: { 
-          userId: comment.userId,
-          userName: comment.userName,
-          userUsername: comment.userUsername,
-          content: comment.content,
-          createdAt: new Date() 
-        } as any
-      },
+        $push: { comments: sanitizedComment as any },
         $set: { updatedAt: new Date() }
       }
     );
@@ -516,9 +670,11 @@ class MongoDBClient {
       createdAt: now,
       updatedAt: now,
     };
-    
-    await this.friendships.insertOne(doc);
-    return doc;
+
+    const sanitizedDoc = this.prepareDocumentForWrite(doc, 'friendship');
+
+    await this.friendships.insertOne(sanitizedDoc);
+    return sanitizedDoc;
   }
 
   async getFriendshipById(id: string): Promise<FriendshipDocument | null> {
@@ -605,20 +761,59 @@ class MongoDBClient {
       isRead: false,
       createdAt: new Date(),
     };
-    
-    await this.notifications.insertOne(doc);
-    return doc;
+
+    const sanitizedDoc = this.prepareDocumentForWrite(doc, 'notification');
+
+    await this.notifications.insertOne(sanitizedDoc);
+    return sanitizedDoc;
   }
 
   async getNotifications(userId: string, limit = 20, offset = 0): Promise<NotificationDocument[]> {
     if (!this.notifications) throw new Error('MongoDB not connected');
-    
-    return this.notifications
-      .find({ userId })
-      .sort({ createdAt: -1 })
-      .skip(offset)
-      .limit(limit)
-      .toArray();
+
+    try {
+      return await this.notifications
+        .find({ userId })
+        .sort({ createdAt: -1 })
+        .skip(offset)
+        .limit(limit)
+        .toArray();
+    } catch (error) {
+      console.warn('Falling back to safe notifications projection after read error:', { userId, error });
+
+      const notificationRefs = await this.notifications
+        .find({ userId }, { projection: { _id: 1, createdAt: 1 } })
+        .sort({ createdAt: -1 })
+        .skip(offset)
+        .limit(limit)
+        .toArray();
+
+      const notifications = await Promise.all(
+        notificationRefs.map(async (notificationRef) => {
+          try {
+            return await this.notifications!.findOne({ _id: notificationRef._id });
+          } catch (notificationError) {
+            console.warn('Deleting corrupt notification after decode failure:', {
+              notificationId: notificationRef._id,
+              error: notificationError,
+            });
+
+            try {
+              await this.notifications!.deleteOne({ _id: notificationRef._id });
+            } catch (deleteError) {
+              console.warn('Could not delete corrupt notification:', {
+                notificationId: notificationRef._id,
+                error: deleteError,
+              });
+            }
+
+            return null;
+          }
+        })
+      );
+
+      return notifications.filter((notification): notification is NotificationDocument => !!notification);
+    }
   }
 
   async countUnreadNotifications(userId: string): Promise<number> {
@@ -664,9 +859,11 @@ class MongoDBClient {
       createdAt: now,
       updatedAt: now,
     };
-    
-    await this.conversations.insertOne(doc);
-    return doc;
+
+    const sanitizedDoc = this.prepareDocumentForWrite(doc, 'conversation');
+
+    await this.conversations.insertOne(sanitizedDoc);
+    return sanitizedDoc;
   }
 
   async getUserConversations(userId: string): Promise<ConversationDocument[]> {
@@ -685,12 +882,17 @@ class MongoDBClient {
 
   async updateConversationLastMessage(conversationId: string, message: { content: string; senderId: string; senderName: string }): Promise<boolean> {
     if (!this.conversations) throw new Error('MongoDB not connected');
+
+    const sanitizedLastMessage = this.prepareDocumentForWrite({
+      ...message,
+      createdAt: new Date(),
+    }, 'conversation message');
     
     const result = await this.conversations.updateOne(
       { _id: conversationId },
       {
         $set: {
-          lastMessage: { ...message, createdAt: new Date() },
+          lastMessage: sanitizedLastMessage,
           updatedAt: new Date()
         }
       }

@@ -125,7 +125,11 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json();
     const { receiverId, receiverName, content } = body;
-    console.log('POST /api/messages - Request body:', { receiverId, receiverName, content: content?.substring(0, 50) });
+    console.log('POST /api/messages - Request body:', {
+      receiverId,
+      receiverName,
+      content: typeof content === 'string' ? content.slice(0, 50) : content,
+    });
 
     if (!receiverId || !content) {
       console.log('POST /api/messages - Missing required fields');
@@ -135,11 +139,30 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (typeof receiverId !== 'string' || typeof content !== 'string') {
+      console.log('POST /api/messages - Invalid field types', {
+        receiverIdType: typeof receiverId,
+        contentType: typeof content,
+      });
+      return NextResponse.json(
+        { error: 'Parâmetros inválidos' },
+        { status: 400 }
+      );
+    }
+
+    const normalizedContent = content.trim();
+    if (!normalizedContent) {
+      return NextResponse.json(
+        { error: 'Conteúdo da mensagem é obrigatório' },
+        { status: 400 }
+      );
+    }
+
     const cassandra = await getCassandra();
     console.log('POST /api/messages - Cassandra connected');
     
     // Enviar mensagem (Cassandra)
-    const message = await cassandra.sendMessage(user.id, receiverId, user.name, content);
+    const message = await cassandra.sendMessage(user.id, receiverId, user.name, normalizedContent);
     console.log('POST /api/messages - Message sent to Cassandra:', message);
     
     console.log('Message properties:', {
@@ -166,7 +189,7 @@ export async function POST(request: NextRequest) {
       console.log('POST /api/messages - Updating existing conversation:', existingConv._id);
       // Update existing conversation with last message
       const updateResult = await mongo.updateConversationLastMessage(existingConv._id, {
-        content,
+        content: normalizedContent,
         senderId: user.id,
         senderName: user.name,
       });
@@ -195,7 +218,7 @@ export async function POST(request: NextRequest) {
     // Notificar via Redis Pub/Sub (tempo real)
     console.log('POST /api/messages - Sending real-time notification');
     const redis = await getRedis();
-    await redis.notifyNewMessage(receiverId, user.id, content);
+    await redis.notifyNewMessage(receiverId, user.id, normalizedContent);
     console.log('POST /api/messages - Real-time notification sent');
 
     const response = {
