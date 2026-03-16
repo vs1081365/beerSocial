@@ -1,34 +1,55 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth';
+/**
+ * NOTIFICATIONS ENDPOINT
+ * 
+ * ============================================================
+ * TECNOLOGIA: MongoDB
+ * PROPÓSITO: Notificações do utilizador
+ * ============================================================
+ */
 
-// GET - Get user notifications
+import { NextRequest, NextResponse } from 'next/server';
+import { getCurrentUser } from '@/lib/auth';
+import { getMongoDB } from '@/lib/mongodb-client';
+import { getRedis } from '@/lib/redis-client';
+
+// GET - Obter notificações
 export async function GET(request: NextRequest) {
   try {
     const user = await getCurrentUser();
     if (!user) {
-      return NextResponse.json(
-        { error: 'Não autenticado' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Não autenticado' }, { status: 401 });
     }
 
     const searchParams = request.nextUrl.searchParams;
     const limit = parseInt(searchParams.get('limit') || '20');
     const offset = parseInt(searchParams.get('offset') || '0');
 
-    const notifications = await db.notification.findMany({
-      where: { userId: user.id },
-      orderBy: { createdAt: 'desc' },
-      take: limit,
-      skip: offset
-    });
+    // Tentar cache primeiro (apenas contador)
+    const redis = await getRedis();
+    const cacheKey = `notifications:${user.id}:count`;
+    const cachedCount = await redis.getCache<number>(cacheKey);
 
-    const unreadCount = await db.notification.count({
-      where: { userId: user.id, isRead: false }
-    });
+    const mongo = await getMongoDB();
+    
+    const [notifications, unreadCount] = await Promise.all([
+      mongo.getNotifications(user.id, limit, offset),
+      mongo.countUnreadNotifications(user.id),
+    ]);
 
-    return NextResponse.json({ notifications, unreadCount });
+    // Cache do contador
+    if (cachedCount === null) {
+      await redis.setCache(cacheKey, unreadCount, 10); // 10 segundos
+    }
+
+    return NextResponse.json({
+      technology: {
+        storage: 'MongoDB (notifications collection)',
+        indexes: ['userId_1_createdAt_-1', 'userId_1_isRead_1'],
+        cache: 'Redis (unread count, TTL 10s)',
+      },
+      notifications,
+      unreadCount,
+    });
   } catch (error) {
     console.error('Get notifications error:', error);
     return NextResponse.json(
@@ -38,33 +59,36 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// PUT - Mark notifications as read
+// PUT - Marcar como lida
 export async function PUT(request: NextRequest) {
   try {
     const user = await getCurrentUser();
     if (!user) {
-      return NextResponse.json(
-        { error: 'Não autenticado' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Não autenticado' }, { status: 401 });
     }
 
     const body = await request.json();
     const { notificationId, markAllRead } = body;
 
+    const mongo = await getMongoDB();
+
     if (markAllRead) {
-      await db.notification.updateMany({
-        where: { userId: user.id, isRead: false },
-        data: { isRead: true }
-      });
+      await mongo.markAllNotificationsRead(user.id);
     } else if (notificationId) {
-      await db.notification.update({
-        where: { id: notificationId },
-        data: { isRead: true }
-      });
+      await mongo.markNotificationRead(notificationId);
     }
 
-    return NextResponse.json({ success: true });
+    // Invalidar cache
+    const redis = await getRedis();
+    await redis.deleteCache(`notifications:${user.id}:count`);
+
+    return NextResponse.json({
+      technology: {
+        storage: 'MongoDB (updateMany)',
+        cacheInvalidation: 'Redis',
+      },
+      success: true,
+    });
   } catch (error) {
     console.error('Update notification error:', error);
     return NextResponse.json(

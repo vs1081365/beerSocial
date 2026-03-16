@@ -1,6 +1,19 @@
+/**
+ * COMMENTS ENDPOINT
+ * 
+ * ============================================================
+ * TECNOLOGIA: MongoDB
+ * PROPÓSITO: Comentários (embedded na review)
+ * ============================================================
+ * 
+ * NOTA: Comentários são guardados DENTRO do documento de review
+ * como um array embedded. Isto elimina a necessidade de JOINs.
+ */
+
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
+import { getMongoDB } from '@/lib/mongodb-client';
 import { getCurrentUser } from '@/lib/auth';
+import { getRedis } from '@/lib/redis-client';
 
 // GET - List comments for a review
 export async function GET(request: NextRequest) {
@@ -15,20 +28,59 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const comments = await db.comment.findMany({
-      where: { reviewId },
-      include: {
-        user: {
-          select: { id: true, name: true, username: true, avatar: true }
-        },
-        _count: {
-          select: { likes: true }
-        }
-      },
-      orderBy: { createdAt: 'asc' }
-    });
+    const mongo = await getMongoDB();
+    const review = await mongo.getReviewById(reviewId);
 
-    return NextResponse.json({ comments });
+    if (!review) {
+      return NextResponse.json(
+        { error: 'Review não encontrada' },
+        { status: 404 }
+      );
+    }
+
+    // Transform comments to include full user information
+    const transformedComments = await Promise.all(
+      (review.comments || []).map(async (comment) => {
+        try {
+          const user = await mongo.getUserById(comment.userId);
+          return {
+            id: `${reviewId}_${comment.userId}_${comment.createdAt.getTime()}`, // Generate unique ID
+            content: comment.content,
+            createdAt: comment.createdAt.toISOString(),
+            user: {
+              id: comment.userId,
+              name: comment.userName,
+              username: comment.userUsername || user?.username || comment.userName.toLowerCase().replace(/\s+/g, ''),
+              avatar: user?.avatar || null,
+            },
+          };
+        } catch (error) {
+          console.warn('Error fetching user for comment:', error);
+          // Return comment with basic info if user fetch fails
+          return {
+            id: `${reviewId}_${comment.userId}_${comment.createdAt.getTime()}`,
+            content: comment.content,
+            createdAt: comment.createdAt.toISOString(),
+            user: {
+              id: comment.userId,
+              name: comment.userName,
+              username: comment.userUsername || comment.userName.toLowerCase().replace(/\s+/g, ''),
+              avatar: null,
+            },
+          };
+        }
+      })
+    );
+
+    return NextResponse.json({
+      technology: {
+        storage: 'MongoDB (embedded in review document)',
+        structure: 'review.comments[] - array de documentos',
+        advantage: 'Uma única query obtém review + todos os comments',
+        transformation: 'User info fetched and merged for each comment',
+      },
+      comments: transformedComments,
+    });
   } catch (error) {
     console.error('Get comments error:', error);
     return NextResponse.json(
@@ -50,7 +102,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { reviewId, content, parentId } = body;
+    const { reviewId, content } = body;
 
     if (!reviewId || !content) {
       return NextResponse.json(
@@ -59,39 +111,51 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const comment = await db.comment.create({
-      data: {
-        userId: user.id,
-        reviewId,
-        content,
-        parentId
-      },
-      include: {
-        user: {
-          select: { id: true, name: true, username: true, avatar: true }
-        }
-      }
+    const mongo = await getMongoDB();
+    
+    // Get full user info for the comment
+    const userDoc = await mongo.getUserById(user.id);
+    
+    // Adicionar comentário à review (embedded)
+    const success = await mongo.addComment(reviewId, {
+      userId: user.id,
+      userName: user.name,
+      userUsername: userDoc?.username || user.name.toLowerCase().replace(/\s+/g, ''),
+      content,
     });
 
-    // Notify review author
-    const review = await db.review.findUnique({
-      where: { id: reviewId },
-      include: { user: true, beer: true }
-    });
+    if (!success) {
+      return NextResponse.json(
+        { error: 'Erro ao adicionar comentário' },
+        { status: 500 }
+      );
+    }
 
+    // Criar notificação
+    const review = await mongo.getReviewById(reviewId);
     if (review && review.userId !== user.id) {
-      await db.notification.create({
-        data: {
-          userId: review.userId,
-          type: 'NEW_COMMENT',
-          title: 'Novo Comentário',
-          message: `${user.name} comentou na sua review de ${review.beer.name}`,
-          data: JSON.stringify({ reviewId, commentId: comment.id })
-        }
+      await mongo.createNotification({
+        userId: review.userId,
+        type: 'NEW_COMMENT',
+        title: 'Novo Comentário',
+        message: `${user.name} comentou na sua review`,
+        data: JSON.stringify({ reviewId }),
       });
     }
 
-    return NextResponse.json({ comment });
+    // Invalidar cache
+    const redis = await getRedis();
+    await redis.invalidatePattern(`reviews:*`);
+    await redis.invalidatePattern(`beer:${review?.beerId}`);
+
+    return NextResponse.json({
+      technology: {
+        operation: '$push - adicionar elemento ao array embedded',
+        notification: 'MongoDB (notifications collection)',
+        cacheInvalidation: 'Redis',
+      },
+      success: true,
+    });
   } catch (error) {
     console.error('Create comment error:', error);
     return NextResponse.json(

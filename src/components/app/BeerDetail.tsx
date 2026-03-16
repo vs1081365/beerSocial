@@ -29,6 +29,7 @@ export function BeerDetail({
   onLoginRequired
 }: BeerDetailProps) {
   const [beer, setBeer] = useState<any>(null);
+  const [reviews, setReviews] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showReviewForm, setShowReviewForm] = useState(false);
   const [rating, setRating] = useState(3);
@@ -45,11 +46,12 @@ export function BeerDetail({
       const res = await fetch(`/api/beers/${beerId}`);
       const data = await res.json();
       setBeer(data.beer);
+      setReviews(data.reviews || []);
 
       // Check which reviews are liked
-      if (currentUser) {
+      if (currentUser && data.reviews) {
         const liked = new Set<string>();
-        for (const review of data.beer.reviews) {
+        for (const review of data.reviews) {
           const likeRes = await fetch(`/api/likes?reviewId=${review.id}`);
           const likeData = await likeRes.json();
           if (likeData.liked) liked.add(review.id);
@@ -87,6 +89,9 @@ export function BeerDetail({
         setReviewContent('');
         setRating(3);
         fetchBeer();
+
+        // Notify header to refresh notifications (and counts)
+        window.dispatchEvent(new Event('beersocial:refreshNotifications'));
       }
     } catch (error) {
       console.error('Error submitting review:', error);
@@ -120,14 +125,11 @@ export function BeerDetail({
       });
 
       // Update review like count
-      setBeer((prev: any) => ({
-        ...prev,
-        reviews: prev.reviews.map((r: any) => 
-          r.id === reviewId 
-            ? { ...r, _count: { ...r._count, likes: data.liked ? r._count.likes + 1 : r._count.likes - 1 } }
-            : r
-        )
-      }));
+      setReviews(prev => prev.map(r => 
+        r.id === reviewId 
+          ? { ...r, _count: { ...r._count, likes: data.liked ? r._count.likes + 1 : r._count.likes - 1 } }
+          : r
+      ));
     } catch (error) {
       console.error('Error toggling like:', error);
     }
@@ -204,7 +206,7 @@ export function BeerDetail({
                   <span className="text-2xl font-bold">{beer.avgRating.toFixed(1)}</span>
                 </div>
                 <p className="text-sm text-muted-foreground">
-                  {beer._count.reviews} avaliações
+                  {beer.reviewCount} avaliações
                 </p>
               </div>
             </div>
@@ -286,7 +288,7 @@ export function BeerDetail({
       <div className="space-y-4">
         <h2 className="text-xl font-semibold">Avaliações</h2>
         
-        {beer.reviews.length === 0 ? (
+        {reviews.length === 0 ? (
           <Card>
             <CardContent className="py-8 text-center">
               <p className="text-muted-foreground">
@@ -295,7 +297,7 @@ export function BeerDetail({
             </CardContent>
           </Card>
         ) : (
-          beer.reviews.map((review: any) => (
+          reviews.map((review: any) => (
             review?.user ? (
               <Card key={review.id}>
                 <CardContent className="p-4">

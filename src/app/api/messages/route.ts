@@ -1,94 +1,105 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth';
+/**
+ * MESSAGES ENDPOINT
+ * 
+ * ============================================================
+ * TECNOLOGIA: Cassandra
+ * PROPÓSITO: Mensagens privadas (partition key)
+ * ============================================================
+ */
 
-// GET - Get messages (conversation with a user)
+import { NextRequest, NextResponse } from 'next/server';
+import { getCurrentUser } from '@/lib/auth';
+import { getCassandra } from '@/lib/cassandra-client';
+import { getMongoDB } from '@/lib/mongodb-client';
+import { getRedis } from '@/lib/redis-client';
+
+// GET - Obter conversas ou mensagens
 export async function GET(request: NextRequest) {
   try {
     const user = await getCurrentUser();
     if (!user) {
-      return NextResponse.json(
-        { error: 'Não autenticado' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Não autenticado' }, { status: 401 });
     }
 
     const searchParams = request.nextUrl.searchParams;
     const otherUserId = searchParams.get('userId');
     const limit = parseInt(searchParams.get('limit') || '50');
 
+    const cassandra = await getCassandra();
+
     if (otherUserId) {
-      // Get conversation with specific user
-      const messages = await db.message.findMany({
-        where: {
-          OR: [
-            { senderId: user.id, receiverId: otherUserId },
-            { senderId: otherUserId, receiverId: user.id }
-          ]
-        },
-        include: {
-          sender: {
-            select: { id: true, name: true, username: true, avatar: true }
-          }
-        },
-        orderBy: { createdAt: 'asc' },
-        take: limit
-      });
+      // Obter conversa com utilizador específico
+      const messages = await cassandra.getConversation(user.id, otherUserId, limit);
 
-      // Mark as read
-      await db.message.updateMany({
-        where: {
-          senderId: otherUserId,
-          receiverId: user.id,
-          isRead: false
+      // Transform messages to match frontend expectations
+      const transformedMessages = messages.map(message => ({
+        id: message.message_id || `msg_${Date.now()}_${Math.random()}`,
+        content: message.content || '',
+        createdAt: message.created_at?.toISOString() || new Date().toISOString(),
+        sender: {
+          id: message.sender_id || '',
+          name: message.sender_name || 'Unknown User',
+          username: (message.sender_name || 'unknown').toLowerCase().replace(/\s+/g, ''),
+          avatar: null, // TODO: Add avatar support
         },
-        data: { isRead: true }
-      });
-
-      return NextResponse.json({ messages });
-    } else {
-      // Get list of conversations
-      const sentMessages = await db.message.findMany({
-        where: { senderId: user.id },
-        include: {
-          receiver: {
-            select: { id: true, name: true, username: true, avatar: true }
-          }
-        },
-        orderBy: { createdAt: 'desc' }
-      });
-
-      const receivedMessages = await db.message.findMany({
-        where: { receiverId: user.id },
-        include: {
-          sender: {
-            select: { id: true, name: true, username: true, avatar: true }
-          }
-        },
-        orderBy: { createdAt: 'desc' }
-      });
-
-      // Group by user
-      const conversations = new Map();
-      
-      for (const msg of [...sentMessages, ...receivedMessages]) {
-        const otherUser = msg.senderId === user.id ? msg.receiver : msg.sender;
-        if (!conversations.has(otherUser.id)) {
-          conversations.set(otherUser.id, {
-            user: otherUser,
-            lastMessage: msg
-          });
-        }
-      }
-
-      // Count unread
-      const unreadCount = await db.message.count({
-        where: { receiverId: user.id, isRead: false }
-      });
+      }));
 
       return NextResponse.json({
-        conversations: Array.from(conversations.values()),
-        unreadCount
+        technology: {
+          storage: 'Cassandra (messages table)',
+          partitionKey: {
+            field: 'conversation_id',
+            calculation: 'hash(user1_id + user2_id) - ordenados alfabeticamente',
+            purpose: 'Todas as mensagens de uma conversa na mesma partição',
+          },
+          clusteringKey: {
+            field: 'created_at',
+            order: 'ASC',
+            purpose: 'Ordem cronológica automática',
+          },
+          query: `SELECT * FROM messages WHERE conversation_id = '${cassandra.generateConversationId(user.id, otherUserId)}' LIMIT ${limit}`,
+        },
+        conversationId: cassandra.generateConversationId(user.id, otherUserId),
+        messages: transformedMessages,
+      });
+    } else {
+      // Obter lista de conversas (usar MongoDB para metadata)
+      const mongo = await getMongoDB();
+      const conversationsRaw = await mongo.getUserConversations(user.id);
+
+      // Transform conversations to match frontend expectations
+      const conversations = await Promise.all(
+        conversationsRaw.map(async (conv) => {
+          // Find the other participant (not the current user)
+          const otherParticipantIndex = conv.participants.findIndex(p => p !== user.id);
+          const otherParticipantId = conv.participants[otherParticipantIndex];
+          const otherParticipantName = conv.participantNames[otherParticipantIndex];
+
+          // Get user details for avatar
+          const otherUser = await mongo.getUserById(otherParticipantId);
+
+          return {
+            id: conv._id,
+            user: {
+              id: otherParticipantId,
+              name: otherParticipantName,
+              username: otherParticipantName.toLowerCase().replace(/\s+/g, ''), // Generate username
+              avatar: otherUser?.avatar || null,
+            },
+            lastMessage: conv.lastMessage ? {
+              content: conv.lastMessage.content,
+              createdAt: conv.lastMessage.createdAt.toISOString(),
+            } : null,
+          };
+        })
+      );
+
+      return NextResponse.json({
+        technology: {
+          storage: 'MongoDB (para metadata de conversas)',
+          messages: 'Cassandra (para mensagens)',
+        },
+        conversations,
       });
     }
   } catch (error) {
@@ -100,56 +111,122 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST - Send message
+// POST - Enviar mensagem
 export async function POST(request: NextRequest) {
   try {
+    console.log('POST /api/messages - Starting message send');
+    
     const user = await getCurrentUser();
     if (!user) {
-      return NextResponse.json(
-        { error: 'Não autenticado' },
-        { status: 401 }
-      );
+      console.log('POST /api/messages - User not authenticated');
+      return NextResponse.json({ error: 'Não autenticado' }, { status: 401 });
     }
+    console.log('POST /api/messages - User authenticated:', user.id);
 
     const body = await request.json();
-    const { receiverId, content } = body;
+    const { receiverId, receiverName, content } = body;
+    console.log('POST /api/messages - Request body:', { receiverId, receiverName, content: content?.substring(0, 50) });
 
     if (!receiverId || !content) {
+      console.log('POST /api/messages - Missing required fields');
       return NextResponse.json(
         { error: 'Destinatário e conteúdo são obrigatórios' },
         { status: 400 }
       );
     }
 
-    const message = await db.message.create({
-      data: {
+    const cassandra = await getCassandra();
+    console.log('POST /api/messages - Cassandra connected');
+    
+    // Enviar mensagem (Cassandra)
+    const message = await cassandra.sendMessage(user.id, receiverId, user.name, content);
+    console.log('POST /api/messages - Message sent to Cassandra:', message);
+    
+    console.log('Message properties:', {
+      message_id: message.message_id,
+      sender_id: message.sender_id,
+      sender_name: message.sender_name,
+      content: message.content,
+      created_at: message.created_at
+    });
+
+    // Criar ou atualizar conversa (MongoDB)
+    const mongo = await getMongoDB();
+    console.log('POST /api/messages - MongoDB connected');
+    
+    // Check if conversation already exists
+    const existingConversations = await mongo.getUserConversations(user.id);
+    console.log('POST /api/messages - Existing conversations:', existingConversations.length);
+    
+    const existingConv = existingConversations.find(conv => 
+      conv.participants.includes(user.id) && conv.participants.includes(receiverId)
+    );
+
+    if (existingConv) {
+      console.log('POST /api/messages - Updating existing conversation:', existingConv._id);
+      // Update existing conversation with last message
+      const updateResult = await mongo.updateConversationLastMessage(existingConv._id, {
+        content,
         senderId: user.id,
-        receiverId,
-        content
+        senderName: user.name,
+      });
+      console.log('POST /api/messages - Conversation update result:', updateResult);
+    } else {
+      console.log('POST /api/messages - Creating new conversation');
+      // Create new conversation
+      const newConv = await mongo.createConversation(
+        [user.id, receiverId],
+        [user.name, receiverName || 'Unknown']
+      );
+      console.log('POST /api/messages - New conversation created:', newConv._id);
+    }
+
+    // Criar notificação (MongoDB)
+    console.log('POST /api/messages - Creating notification');
+    await mongo.createNotification({
+      userId: receiverId,
+      type: 'NEW_MESSAGE',
+      title: 'Nova Mensagem',
+      message: `${user.name} enviou-lhe uma mensagem`,
+      data: JSON.stringify({ senderId: user.id }),
+    });
+    console.log('POST /api/messages - Notification created');
+
+    // Notificar via Redis Pub/Sub (tempo real)
+    console.log('POST /api/messages - Sending real-time notification');
+    const redis = await getRedis();
+    await redis.notifyNewMessage(receiverId, user.id, content);
+    console.log('POST /api/messages - Real-time notification sent');
+
+    const response = {
+      technology: {
+        storage: 'Cassandra (messages table)',
+        partitionKey: 'conversation_id = hash(user1 + user2)',
+        clusteringKey: 'created_at ASC',
+        notification: 'MongoDB (notifications collection)',
+        realtime: 'Redis Pub/Sub',
       },
-      include: {
+      message: {
+        id: message.message_id,
+        content: message.content,
+        createdAt: message.created_at.toISOString(),
         sender: {
-          select: { id: true, name: true, username: true, avatar: true }
-        }
-      }
-    });
-
-    // Create notification
-    await db.notification.create({
-      data: {
-        userId: receiverId,
-        type: 'NEW_MESSAGE',
-        title: 'Nova Mensagem',
-        message: `${user.name} enviou-lhe uma mensagem`,
-        data: JSON.stringify({ senderId: user.id })
-      }
-    });
-
-    return NextResponse.json({ message });
-  } catch (error) {
+          id: message.sender_id,
+          name: message.sender_name,
+          username: message.sender_name.toLowerCase().replace(/\s+/g, ''), // Generate username
+          avatar: null, // TODO: Add avatar support
+        },
+      },
+      conversationId: cassandra.generateConversationId(user.id, receiverId),
+    };
+    
+    console.log('POST /api/messages - Success response:', response);
+    return NextResponse.json(response);
+  } catch (error: any) {
     console.error('Send message error:', error);
+    console.error('Send message stack:', error?.stack);
     return NextResponse.json(
-      { error: 'Erro ao enviar mensagem' },
+      { error: 'Erro ao enviar mensagem', details: error?.message || String(error) },
       { status: 500 }
     );
   }

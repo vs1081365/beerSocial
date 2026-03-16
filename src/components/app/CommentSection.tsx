@@ -79,6 +79,9 @@ export function CommentSection({ reviewId, currentUser, onUserClick, onClose }: 
       const data = await res.json();
       setComments(prev => [...prev, data.comment]);
       setNewComment('');
+
+      // Trigger header refresh to show new notification
+      window.dispatchEvent(new Event('beersocial:refreshNotifications'));
     } catch (error) {
       console.error('Error posting comment:', error);
     } finally {
@@ -128,26 +131,27 @@ export function CommentSection({ reviewId, currentUser, onUserClick, onClose }: 
           </p>
         ) : (
           comments.map((comment) => (
-            <div key={comment.id} className="flex gap-3">
-              <Avatar 
-                className="h-8 w-8 cursor-pointer"
-                onClick={() => onUserClick(comment.user.id)}
-              >
-                <AvatarImage src={comment.user.avatar || undefined} />
-                <AvatarFallback>{comment.user.name?.charAt(0)}</AvatarFallback>
-              </Avatar>
-              <div className="flex-1">
-                <div className="flex items-center gap-2">
-                  <span 
-                    className="font-medium text-sm cursor-pointer hover:underline"
-                    onClick={() => onUserClick(comment.user.id)}
-                  >
-                    {comment.user.name}
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    @{comment.user.username}
-                  </span>
-                </div>
+            comment && comment.user ? (
+              <div key={comment.id} className="flex gap-3">
+                <Avatar 
+                  className="h-8 w-8 cursor-pointer"
+                  onClick={() => onUserClick(comment.user.id)}
+                >
+                  <AvatarImage src={comment.user.avatar || undefined} />
+                  <AvatarFallback>{comment.user.name?.charAt(0)}</AvatarFallback>
+                </Avatar>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <span 
+                      className="font-medium text-sm cursor-pointer hover:underline"
+                      onClick={() => onUserClick(comment.user.id)}
+                    >
+                      {comment.user.name}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      @{comment.user.username}
+                    </span>
+                  </div>
                 <p className="text-sm mt-1">{comment.content}</p>
                 <div className="flex items-center gap-4 mt-1">
                   <span className="text-xs text-muted-foreground">
@@ -163,6 +167,7 @@ export function CommentSection({ reviewId, currentUser, onUserClick, onClose }: 
                 </div>
               </div>
             </div>
+            ) : null
           ))
         )}
       </div>

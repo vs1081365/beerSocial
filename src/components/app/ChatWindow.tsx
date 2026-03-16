@@ -27,14 +27,16 @@ interface ChatWindowProps {
     avatar: string | null;
   };
   currentUserId: string;
+  currentUserName: string;
   onBack: () => void;
 }
 
-export function ChatWindow({ otherUser, currentUserId, onBack }: ChatWindowProps) {
+export function ChatWindow({ otherUser, currentUserId, currentUserName, onBack }: ChatWindowProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -50,11 +52,12 @@ export function ChatWindow({ otherUser, currentUserId, onBack }: ChatWindowProps
 
   const fetchMessages = async () => {
     try {
-      const res = await fetch(`/api/messages?userId=${otherUser.id}`);
+      const res = await fetch(`/api/messages?userId=${otherUser.id}`, { credentials: 'include' });
       const data = await res.json();
-      setMessages(data.messages);
+      setMessages(data.messages || []);
     } catch (error) {
       console.error('Error fetching messages:', error);
+      setMessages([]);
     } finally {
       setIsLoading(false);
     }
@@ -68,21 +71,60 @@ export function ChatWindow({ otherUser, currentUserId, onBack }: ChatWindowProps
     e.preventDefault();
     if (!newMessage.trim()) return;
 
+    // Check if user is logged in
+    if (!currentUserId) {
+      setError('You must be logged in to send messages');
+      return;
+    }
+
+    // Check if user is trying to message themselves
+    if (currentUserId === otherUser.id) {
+      setError('You cannot send messages to yourself');
+      return;
+    }
+
     setIsSending(true);
+    setError(null);
     try {
       const res = await fetch('/api/messages', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           receiverId: otherUser.id,
+          receiverName: otherUser.name,
           content: newMessage.trim()
         })
       });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        console.error('Failed to send message', { status: res.status, body: err });
+        
+        if (res.status === 401) {
+          setError('Please log in to send messages');
+        } else {
+          setError(err.error || 'Failed to send message');
+        }
+        return;
+      }
+
       const data = await res.json();
-      setMessages(prev => [...prev, data.message]);
-      setNewMessage('');
+
+      // Ensure the message has the correct structure
+      if (data?.message && data.message.sender) {
+        setMessages(prev => [...prev, data.message]);
+        setNewMessage('');
+
+        // Trigger global refresh for notifications / counts
+        window.dispatchEvent(new Event('beersocial:refreshNotifications'));
+      } else {
+        console.error('Invalid message structure received:', data?.message);
+        setError('Invalid response from server');
+      }
     } catch (error) {
       console.error('Error sending message:', error);
+      setError('Network error - please try again');
     } finally {
       setIsSending(false);
     }
@@ -111,7 +153,7 @@ export function ChatWindow({ otherUser, currentUserId, onBack }: ChatWindowProps
           <div className="flex items-center justify-center h-full">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
           </div>
-        ) : messages.length === 0 ? (
+        ) : !messages || messages.length === 0 ? (
           <div className="flex items-center justify-center h-full">
             <p className="text-muted-foreground text-center">
               Começa a conversa com {otherUser.name}!
@@ -121,18 +163,18 @@ export function ChatWindow({ otherUser, currentUserId, onBack }: ChatWindowProps
           messages.map((message) => (
             <div
               key={message.id}
-              className={`flex ${message.sender.id === currentUserId ? 'justify-end' : 'justify-start'}`}
+              className={`flex ${message.sender?.id === currentUserId ? 'justify-end' : 'justify-start'}`}
             >
               <div
                 className={`max-w-[70%] rounded-lg px-4 py-2 ${
-                  message.sender.id === currentUserId
+                  message.sender?.id === currentUserId
                     ? 'bg-amber-500 text-white'
                     : 'bg-muted'
                 }`}
               >
                 <p>{message.content}</p>
                 <p className={`text-xs mt-1 ${
-                  message.sender.id === currentUserId ? 'text-amber-100' : 'text-muted-foreground'
+                  message.sender?.id === currentUserId ? 'text-amber-100' : 'text-muted-foreground'
                 }`}>
                   {new Date(message.createdAt).toLocaleTimeString('pt-PT', { 
                     hour: '2-digit', 
@@ -145,6 +187,12 @@ export function ChatWindow({ otherUser, currentUserId, onBack }: ChatWindowProps
         )}
         <div ref={messagesEndRef} />
       </CardContent>
+      
+      {error && (
+        <div className="flex-shrink-0 px-4 py-2 bg-red-50 border-t border-red-200">
+          <p className="text-sm text-red-600">{error}</p>
+        </div>
+      )}
       
       <form onSubmit={handleSend} className="flex-shrink-0 p-4 border-t flex gap-2">
         <Input

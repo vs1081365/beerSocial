@@ -37,10 +37,10 @@ export function FriendsList({ currentUserId, onBack, onUserClick, onSendMessage 
 
   const fetchFriends = async () => {
     try {
-      const res = await fetch('/api/friends');
+    const res = await fetch('/api/friends', { credentials: 'include' });
       const data = await res.json();
-      setFriends(data.friends);
-      setPendingRequests(data.pendingRequests);
+      setFriends(data.friends || []);
+      setPendingRequests(data.pendingRequests || []);
     } catch (error) {
       console.error('Error fetching friends:', error);
     } finally {
@@ -58,7 +58,7 @@ export function FriendsList({ currentUserId, onBack, onUserClick, onSendMessage 
     try {
       const res = await fetch(`/api/users?search=${encodeURIComponent(searchQuery)}`);
       const data = await res.json();
-      setSearchResults(data.users.filter((u: User) => u.id !== currentUserId));
+      setSearchResults((data.users || []).filter((u: User) => u.id !== currentUserId));
     } catch (error) {
       console.error('Error searching users:', error);
     } finally {
@@ -68,11 +68,19 @@ export function FriendsList({ currentUserId, onBack, onUserClick, onSendMessage 
 
   const handleSendRequest = async (userId: string) => {
     try {
-      await fetch('/api/friends', {
+      const res = await fetch('/api/friends', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ addresseeId: userId })
       });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => undefined);
+        console.error('Error sending friend request', { status: res.status, body });
+        return;
+      }
+
       setSearchResults(prev => prev.map(u => ({ ...u, requestSent: true } as any)));
     } catch (error) {
       console.error('Error sending friend request:', error);

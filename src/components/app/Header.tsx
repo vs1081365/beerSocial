@@ -76,12 +76,21 @@ export function Header({ currentUser, onAuth, onLogout, onSearch, onNavigate }: 
   const [showMessages, setShowMessages] = useState(false);
 
   useEffect(() => {
-    if (currentUser) {
-      fetchData();
-      // Poll for new notifications every 30 seconds
-      const interval = setInterval(fetchData, 30000);
-      return () => clearInterval(interval);
-    }
+    if (!currentUser) return;
+
+    fetchData();
+
+    // Poll for new notifications every 30 seconds
+    const interval = setInterval(fetchData, 30000);
+
+    // Also refresh when other parts of the app dispatch an update event
+    const onRefresh = () => fetchData();
+    window.addEventListener('beersocial:refreshNotifications', onRefresh);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('beersocial:refreshNotifications', onRefresh);
+    };
   }, [currentUser]);
 
   const fetchData = async () => {
@@ -94,19 +103,19 @@ export function Header({ currentUser, onAuth, onLogout, onSearch, onNavigate }: 
 
       if (notifRes.ok) {
         const notifData = await notifRes.json();
-        setNotifications(notifData.notifications);
-        setUnreadNotifications(notifData.unreadCount);
+        setNotifications(notifData.notifications || []);
+        setUnreadNotifications(notifData.unreadCount || 0);
       }
 
       if (friendsRes.ok) {
         const friendsData = await friendsRes.json();
-        setFriendRequests(friendsData.pendingRequests);
+        setFriendRequests(friendsData.pendingRequests || []);
       }
 
       if (msgRes.ok) {
         const msgData = await msgRes.json();
-        setConversations(msgData.conversations);
-        setUnreadMessages(msgData.unreadCount);
+        setConversations(msgData.conversations || []);
+        setUnreadMessages(msgData.unreadCount || 0);
       }
     } catch (error) {
       console.error('Error fetching data:', error);
@@ -167,6 +176,7 @@ export function Header({ currentUser, onAuth, onLogout, onSearch, onNavigate }: 
     switch (type) {
       case 'FRIEND_REQUEST': return <UserPlus className="h-4 w-4" />;
       case 'FRIEND_ACCEPTED': return <Check className="h-4 w-4" />;
+      case 'BEER_REVIEW': return <Beer className="h-4 w-4" />;
       case 'NEW_REVIEW': return <Beer className="h-4 w-4" />;
       case 'NEW_COMMENT': return <MessageCircle className="h-4 w-4" />;
       case 'NEW_LIKE': return <span>❤️</span>;
@@ -235,37 +245,39 @@ export function Header({ currentUser, onAuth, onLogout, onSearch, onNavigate }: 
                     </SheetDescription>
                   </SheetHeader>
                   <ScrollArea className="h-[calc(100vh-120px)] mt-4">
-                    {friendRequests.length > 0 && (
-                      <div className="mb-6">
-                        <h3 className="font-semibold mb-2">Pedidos Pendentes</h3>
-                        {friendRequests.filter(req => req?.requester).map((req) => (
-                          <div key={req.id} className="flex items-center gap-2 p-2 rounded-lg hover:bg-muted">
-                            <Avatar>
-                              <AvatarImage src={req.requester.avatar || undefined} />
-                              <AvatarFallback>{req.requester.name?.charAt(0) || '?'}</AvatarFallback>
-                            </Avatar>
-                            <div className="flex-1 min-w-0">
-                              <p className="font-medium truncate">{req.requester.name}</p>
-                              <p className="text-sm text-muted-foreground">@{req.requester.username}</p>
+                    <div className="space-y-4">
+                      {friendRequests.length > 0 && (
+                        <div className="mb-6">
+                          <h3 className="font-semibold mb-2">Pedidos Pendentes</h3>
+                          {(friendRequests || []).filter(req => req?.requester).map((req, index) => (
+                            <div key={req.id || `friend-request-${index}`} className="flex items-center gap-2 p-2 rounded-lg hover:bg-muted">
+                              <Avatar>
+                                <AvatarImage src={req.requester?.avatar || undefined} />
+                                <AvatarFallback>{req.requester?.name?.charAt(0) || '?'}</AvatarFallback>
+                              </Avatar>
+                              <div className="flex-1 min-w-0">
+                                <p className="font-medium truncate">{req.requester?.name || 'Usuário desconhecido'}</p>
+                                <p className="text-sm text-muted-foreground">@{req.requester?.username || ''}</p>
+                              </div>
+                              <div className="flex gap-1">
+                                <Button size="icon" variant="ghost" onClick={() => handleAcceptFriend(req.id)}>
+                                  <Check className="h-4 w-4 text-green-500" />
+                                </Button>
+                                <Button size="icon" variant="ghost" onClick={() => handleRejectFriend(req.id)}>
+                                  <X className="h-4 w-4 text-red-500" />
+                                </Button>
+                              </div>
                             </div>
-                            <div className="flex gap-1">
-                              <Button size="icon" variant="ghost" onClick={() => handleAcceptFriend(req.id)}>
-                                <Check className="h-4 w-4 text-green-500" />
-                              </Button>
-                              <Button size="icon" variant="ghost" onClick={() => handleRejectFriend(req.id)}>
-                                <X className="h-4 w-4 text-red-500" />
-                              </Button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    <Button 
-                      className="w-full" 
-                      onClick={() => onNavigate('friends')}
-                    >
-                      Ver Todos os Amigos
-                    </Button>
+                          ))}
+                        </div>
+                      )}
+                      <Button 
+                        className="w-full" 
+                        onClick={() => onNavigate('friends')}
+                      >
+                        Ver Todos os Amigos
+                      </Button>
+                    </div>
                   </ScrollArea>
                 </SheetContent>
               </Sheet>
@@ -292,27 +304,29 @@ export function Header({ currentUser, onAuth, onLogout, onSearch, onNavigate }: 
                         Sem conversas ainda
                       </p>
                     ) : (
-                      conversations.filter(conv => conv?.user).map((conv, i) => (
-                        <div
-                          key={i}
-                          className="flex items-center gap-2 p-2 rounded-lg hover:bg-muted cursor-pointer"
-                          onClick={() => {
-                            setShowMessages(false);
-                            onNavigate('chat', conv.user);
-                          }}
-                        >
-                          <Avatar>
-                            <AvatarImage src={conv.user.avatar || undefined} />
-                            <AvatarFallback>{conv.user.name?.charAt(0) || '?'}</AvatarFallback>
-                          </Avatar>
-                          <div className="flex-1 min-w-0">
-                            <p className="font-medium truncate">{conv.user.name}</p>
-                            <p className="text-sm text-muted-foreground truncate">
-                              {conv.lastMessage?.content}
-                            </p>
+                      <div className="space-y-2">
+                        {(conversations || []).filter(conv => conv?.user).map((conv, index) => (
+                          <div
+                            key={conv.user?.id || `conversation-${index}`}
+                            className="flex items-center gap-2 p-2 rounded-lg hover:bg-muted cursor-pointer"
+                            onClick={() => {
+                              setShowMessages(false);
+                              onNavigate('chat', conv.user);
+                            }}
+                          >
+                            <Avatar>
+                              <AvatarImage src={conv.user.avatar || undefined} />
+                              <AvatarFallback>{conv.user.name?.charAt(0) || '?'}</AvatarFallback>
+                            </Avatar>
+                            <div className="flex-1 min-w-0">
+                              <p className="font-medium truncate">{conv.user.name}</p>
+                              <p className="text-sm text-muted-foreground truncate">
+                                {conv.lastMessage?.content}
+                              </p>
+                            </div>
                           </div>
-                        </div>
-                      ))
+                        ))}
+                      </div>
                     )}
                   </ScrollArea>
                 </SheetContent>
@@ -343,21 +357,23 @@ export function Header({ currentUser, onAuth, onLogout, onSearch, onNavigate }: 
                         Sem notificações
                       </p>
                     ) : (
-                      notifications.map((notif) => (
-                        <div
-                          key={notif.id}
-                          className={`flex items-start gap-2 p-2 rounded-lg hover:bg-muted ${!notif.isRead ? 'bg-amber-50' : ''}`}
-                        >
-                          <div className="mt-1">{getNotificationIcon(notif.type)}</div>
-                          <div className="flex-1">
-                            <p className="font-medium text-sm">{notif.title}</p>
-                            <p className="text-sm text-muted-foreground">{notif.message}</p>
-                            <p className="text-xs text-muted-foreground mt-1">
-                              {new Date(notif.createdAt).toLocaleDateString('pt-PT')}
-                            </p>
+                      <div className="space-y-2">
+                        {(notifications || []).map((notif, index) => (
+                          <div
+                            key={notif.id || `notification-${index}`}
+                            className={`flex items-start gap-2 p-2 rounded-lg hover:bg-muted ${!notif.isRead ? 'bg-amber-50' : ''}`}
+                          >
+                            <div className="mt-1">{getNotificationIcon(notif.type)}</div>
+                            <div className="flex-1">
+                              <p className="font-medium text-sm">{notif.title}</p>
+                              <p className="text-sm text-muted-foreground">{notif.message}</p>
+                              <p className="text-xs text-muted-foreground mt-1">
+                                {new Date(notif.createdAt).toLocaleDateString('pt-PT')}
+                              </p>
+                            </div>
                           </div>
-                        </div>
-                      ))
+                        ))}
+                      </div>
                     )}
                   </ScrollArea>
                 </SheetContent>

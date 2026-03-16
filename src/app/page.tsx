@@ -198,10 +198,15 @@ export default function Home() {
         );
       
       case 'chat':
+        if (!currentUser) {
+          setShowAuthModal(true);
+          return null;
+        }
         return (
           <ChatWindow
             otherUser={viewData}
-            currentUserId={currentUser!.id}
+            currentUserId={currentUser.id}
+            currentUserName={currentUser.name}
             onBack={() => setView('feed')}
           />
         );

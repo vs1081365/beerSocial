@@ -1,6 +1,11 @@
+/**
+ * AUTH LOGIN ENDPOINT
+ * 
+ * Tecnologia: MongoDB (users) + Redis (sessões)
+ */
+
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
-import { verifyPassword, createSession, setSessionCookie } from '@/lib/auth';
+import { loginUser } from '@/lib/auth';
 
 export async function POST(request: NextRequest) {
   try {
@@ -14,45 +19,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Find user
-    const user = await db.user.findUnique({
-      where: { email }
-    });
+    const result = await loginUser(email, password);
 
-    if (!user) {
+    if (!result.success) {
       return NextResponse.json(
-        { error: 'Credenciais inválidas' },
+        { error: result.error },
         { status: 401 }
       );
     }
 
-    // Verify password
-    const isValid = await verifyPassword(password, user.password);
-    if (!isValid) {
-      return NextResponse.json(
-        { error: 'Credenciais inválidas' },
-        { status: 401 }
-      );
-    }
-
-    // Create session
-    const sessionId = await createSession(user.id);
-
-    const response = NextResponse.json({
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        username: user.username,
-        avatar: user.avatar,
-        bio: user.bio,
-        location: user.location,
-        favoriteBeer: user.favoriteBeer
+    return NextResponse.json({
+      user: result.user,
+      technology: {
+        storage: 'MongoDB',
+        session: 'Redis (hash com TTL 24h)',
       }
     });
-
-    response.headers.set('Set-Cookie', setSessionCookie(sessionId));
-    return response;
   } catch (error) {
     console.error('Login error:', error);
     return NextResponse.json(

@@ -1,0 +1,102 @@
+version: '3.8'
+
+services:
+  # ============================================
+  # REDIS - Cache e estruturas de baixa latência
+  # Porta: 6379
+  # Uso: Cache de queries, sessões, contadores, rate limiting
+  # ============================================
+  redis:
+    image: redis:7-alpine
+    container_name: beersocial-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - beersocial-network
+
+  # ============================================
+  # MONGODB - Dados documentais
+  # Porta: 27017
+  # Uso: Reviews com comentários embedded, perfis de utilizador, logs
+  # ============================================
+  mongodb:
+    image: mongo:7
+    container_name: beersocial-mongodb
+    ports:
+      - "27018:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: beersocial
+      MONGO_INITDB_ROOT_PASSWORD: beersocial123
+      MONGO_INITDB_DATABASE: beersocial
+    volumes:
+      - mongodb_data:/data/db
+      - ./docker/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - beersocial-network
+
+  # ============================================
+  # CASSANDRA - Dados distribuídos com partition key
+  # Portas: 9042 (CQL), 7000 (intra-node)
+  # Uso: Timeline/feed, mensagens, notificações
+  # ============================================
+  cassandra:
+    image: cassandra:4.1
+    container_name: beersocial-cassandra
+    ports:
+      - "9042:9042"
+      - "7000:7000"
+    environment:
+      CASSANDRA_CLUSTER_NAME: BeerSocialCluster
+      CASSANDRA_DC: datacenter1
+      CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
+      # Cassandra 4.1 requires broadcast_rpc_address when rpc_address is 0.0.0.0
+      CASSANDRA_BROADCAST_RPC_ADDRESS: 127.0.0.1
+      MAX_HEAP_SIZE: 512M
+      HEAP_NEWSIZE: 100M
+    volumes:
+      - cassandra_data:/var/lib/cassandra
+      - ./docker/cassandra-init.cql:/docker-entrypoint-initdb.d/cassandra-init.cql:ro
+    healthcheck:
+      test: ["CMD", "cqlsh", "-e", "describe keyspaces"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - beersocial-network
+
+  cassandra-init:
+      image: cassandra:4.1
+      depends_on:
+        cassandra:
+          condition: service_healthy
+      volumes:
+        - ./docker/cassandra-init.cql:/init.cql
+      # O comando abaixo tenta executar o script até ter sucesso
+      command: /bin/bash -c "until cqlsh cassandra 9042 -f /init.cql; do echo 'A aguardar pelo Cassandra...'; sleep 5; done"
+      networks:
+        - beersocial-network
+
+networks:
+  beersocial-network:
+    driver: bridge
+
+volumes:
+  redis_data:
+    name: beersocial_redis_data
+  mongodb_data:
+    name: beersocial_mongodb_data
+  cassandra_data:
+    name: beersocial_cassandra_data

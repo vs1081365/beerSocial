@@ -1,12 +1,29 @@
-import { db } from './db';
+/**
+ * Authentication Library
+ * 
+ * Tecnologias:
+ * - MongoDB: armazenamento de utilizadores (documentos)
+ * - Redis: sessões (hashes com TTL)
+ * - Cassandra: timeline e mensagens do utilizador
+ */
+
 import { cookies } from 'next/headers';
-import { randomUUID } from 'crypto';
+import { getMongoDB } from './mongodb-client';
+import { getRedis } from './redis-client';
 
 const SESSION_COOKIE = 'beersocial_session';
-const SESSION_EXPIRY = 7 * 24 * 60 * 60 * 1000; // 7 days
+const SESSION_TTL = 86400; // 24 horas
 
-// Simple hash function for passwords (in production, use bcrypt)
-export async function hashPassword(password: string): Promise<string> {
+export interface SessionUser {
+  id: string;
+  email: string;
+  name: string;
+  username: string;
+  avatar?: string;
+}
+
+// Hash simples para passwords (em produção usar bcrypt)
+async function hashPassword(password: string): Promise<string> {
   const encoder = new TextEncoder();
   const data = encoder.encode(password + 'beersocial_salt_2024');
   const hashBuffer = await crypto.subtle.digest('SHA-256', data);
@@ -14,75 +31,219 @@ export async function hashPassword(password: string): Promise<string> {
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-export async function verifyPassword(password: string, hash: string): Promise<boolean> {
-  const passwordHash = await hashPassword(password);
-  return passwordHash === hash;
+// Registrar utilizador
+export async function registerUser(
+  email: string,
+  password: string,
+  name: string,
+  username: string
+): Promise<{ success: boolean; user?: SessionUser; error?: string }> {
+  try {
+    const mongo = await getMongoDB();
+    
+    // Verificar se email já existe
+    const existingEmail = await mongo.getUserByEmail(email);
+    if (existingEmail) {
+      return { success: false, error: 'Email já registado' };
+    }
+    
+    // Verificar se username já existe
+    const existingUsername = await mongo.getUserByUsername(username);
+    if (existingUsername) {
+      return { success: false, error: 'Username já existe' };
+    }
+    
+    // Hash da password
+    const hashedPassword = await hashPassword(password);
+    
+    // Criar utilizador no MongoDB
+    const user = await mongo.createUser({
+      email,
+      password: hashedPassword,
+      name,
+      username,
+    });
+    
+    // Criar sessão no Redis
+    await createSession({
+      id: user._id,
+      email: user.email,
+      name: user.name,
+      username: user.username,
+      avatar: user.avatar,
+    });
+    
+    return {
+      success: true,
+      user: {
+        id: user._id,
+        email: user.email,
+        name: user.name,
+        username: user.username,
+        avatar: user.avatar,
+      }
+    };
+  } catch (error) {
+    console.error('Register error:', error);
+    return { success: false, error: 'Erro ao registar utilizador' };
+  }
 }
 
-// Session management (simplified - using memory store)
-const sessions = new Map<string, { userId: string; expires: number }>();
+// Login
+export async function loginUser(
+  email: string,
+  password: string
+): Promise<{ success: boolean; user?: SessionUser; error?: string }> {
+  try {
+    const mongo = await getMongoDB();
+    
+    // Encontrar utilizador no MongoDB
+    const user = await mongo.getUserByEmail(email);
+    if (!user) {
+      return { success: false, error: 'Credenciais inválidas' };
+    }
+    
+    // Verificar password
+    const hashedPassword = await hashPassword(password);
+    if (user.password !== hashedPassword) {
+      return { success: false, error: 'Credenciais inválidas' };
+    }
+    
+    // Criar sessão no Redis
+    await createSession({
+      id: user._id,
+      email: user.email,
+      name: user.name,
+      username: user.username,
+      avatar: user.avatar,
+    });
+    
+    return {
+      success: true,
+      user: {
+        id: user._id,
+        email: user.email,
+        name: user.name,
+        username: user.username,
+        avatar: user.avatar,
+      }
+    };
+  } catch (error) {
+    console.error('Login error:', error);
+    return { success: false, error: 'Erro ao fazer login' };
+  }
+}
 
-export async function createSession(userId: string): Promise<string> {
-  const sessionId = randomUUID();
-  sessions.set(sessionId, {
-    userId,
-    expires: Date.now() + SESSION_EXPIRY
+// Criar sessão (Redis Hash)
+async function createSession(user: SessionUser): Promise<void> {
+  const redis = await getRedis();
+  const sessionId = `sess_${Date.now()}_${Math.random().toString(36).substr(2, 16)}`;
+  
+  // Guardar sessão no Redis como Hash
+  await redis.createSession(sessionId, {
+    userId: user.id,
+    email: user.email,
+    name: user.name,
+    createdAt: Date.now(),
+    lastAccess: Date.now(),
   });
-  return sessionId;
+  
+  // Guardar mapping user -> session
+  await redis.setCache(`user_session:${user.id}`, sessionId, SESSION_TTL);
+  
+  // Definir cookie
+  const cookieStore = await cookies();
+  cookieStore.set(SESSION_COOKIE, sessionId, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge: SESSION_TTL,
+    path: '/',
+  });
 }
 
-export async function getSession(sessionId: string): Promise<{ userId: string } | null> {
-  const session = sessions.get(sessionId);
-  if (!session || session.expires < Date.now()) {
-    sessions.delete(sessionId);
+// Obter utilizador atual
+export async function getCurrentUser(): Promise<SessionUser | null> {
+  try {
+    const cookieStore = await cookies();
+    const sessionId = cookieStore.get(SESSION_COOKIE)?.value;
+    
+    if (!sessionId) {
+      return null;
+    }
+    
+    const redis = await getRedis();
+    const sessionData = await redis.getSession(sessionId);
+    
+    if (!sessionData) {
+      return null;
+    }
+    
+    // Atualizar último acesso
+    await redis.updateSessionAccess(sessionId);
+    
+    // Obter dados completos do user do MongoDB
+    const mongo = await getMongoDB();
+    const user = await mongo.getUserById(sessionData.userId);
+    
+    if (!user) {
+      return null;
+    }
+    
+    return {
+      id: user._id,
+      email: user.email,
+      name: user.name,
+      username: user.username,
+      avatar: user.avatar,
+    };
+  } catch (error) {
+    console.error('Get current user error:', error);
     return null;
   }
-  return { userId: session.userId };
 }
 
-export async function deleteSession(sessionId: string): Promise<void> {
-  sessions.delete(sessionId);
-}
-
-export async function getCurrentUser(): Promise<{
-  id: string;
-  email: string;
-  name: string;
-  username: string;
-  avatar: string | null;
-  bio: string | null;
-  location: string | null;
-  favoriteBeer: string | null;
-} | null> {
-  const cookieStore = await cookies();
-  const sessionId = cookieStore.get(SESSION_COOKIE)?.value;
-  
-  if (!sessionId) return null;
-  
-  const session = await getSession(sessionId);
-  if (!session) return null;
-  
-  const user = await db.user.findUnique({
-    where: { id: session.userId },
-    select: {
-      id: true,
-      email: true,
-      name: true,
-      username: true,
-      avatar: true,
-      bio: true,
-      location: true,
-      favoriteBeer: true
+// Logout
+export async function logoutUser(): Promise<void> {
+  try {
+    const cookieStore = await cookies();
+    const sessionId = cookieStore.get(SESSION_COOKIE)?.value;
+    
+    if (sessionId) {
+      const redis = await getRedis();
+      const sessionData = await redis.getSession(sessionId);
+      
+      if (sessionData) {
+        await redis.deleteCache(`user_session:${sessionData.userId}`);
+      }
+      
+      await redis.deleteSession(sessionId);
     }
-  });
-  
-  return user;
+    
+    cookieStore.delete(SESSION_COOKIE);
+  } catch (error) {
+    console.error('Logout error:', error);
+  }
 }
 
-export function setSessionCookie(sessionId: string): string {
-  return `${SESSION_COOKIE}=${sessionId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_EXPIRY / 1000}`;
-}
+// Alias para compatibilidade
+export { logoutUser as deleteSession };
 
-export function clearSessionCookie(): string {
-  return `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+// Obter ID do utilizador atual
+export async function getCurrentUserId(): Promise<string | null> {
+  try {
+    const cookieStore = await cookies();
+    const sessionId = cookieStore.get(SESSION_COOKIE)?.value;
+    
+    if (!sessionId) {
+      return null;
+    }
+    
+    const redis = await getRedis();
+    const sessionData = await redis.getSession(sessionId);
+    
+    return sessionData?.userId || null;
+  } catch {
+    return null;
+  }
 }

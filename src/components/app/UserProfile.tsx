@@ -57,7 +57,7 @@ export function UserProfile({
 
   const fetchUser = async () => {
     try {
-      const res = await fetch(`/api/users/${userId}`);
+      const res = await fetch(`/api/users/${userId}`, { credentials: 'include' });
       const data = await res.json();
       setUser(data.user);
       setName(data.user.name);
@@ -99,11 +99,19 @@ export function UserProfile({
 
     setIsFriendActionLoading(true);
     try {
-      await fetch('/api/friends', {
+      const res = await fetch('/api/friends', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ addresseeId: userId })
       });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => undefined);
+        console.error('Error sending friend request', { status: res.status, body });
+        return;
+      }
+
       fetchUser();
     } catch (error) {
       console.error('Error sending friend request:', error);
@@ -115,14 +123,22 @@ export function UserProfile({
   const handleAcceptFriend = async () => {
     setIsFriendActionLoading(true);
     try {
-      await fetch('/api/friends', {
+      const res = await fetch('/api/friends', {
         method: 'PUT',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           friendshipId: user.friendshipStatus.friendshipId, 
           action: 'accept' 
         })
       });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => undefined);
+        console.error('Error accepting friend request', { status: res.status, body });
+        return;
+      }
+
       fetchUser();
     } catch (error) {
       console.error('Error accepting friend:', error);

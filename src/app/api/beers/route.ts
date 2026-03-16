@@ -1,8 +1,18 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth';
+/**
+ * BEERS ENDPOINT
+ * 
+ * ============================================================
+ * TECNOLOGIA: MongoDB
+ * PROPÓSITO: Catálogo de cervejas
+ * ============================================================
+ */
 
-// GET - List beers with search
+import { NextRequest, NextResponse } from 'next/server';
+import { getMongoDB } from '@/lib/mongodb-client';
+import { getCurrentUser } from '@/lib/auth';
+import { getRedis } from '@/lib/redis-client';
+
+// GET - Listar cervejas
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
@@ -11,49 +21,43 @@ export async function GET(request: NextRequest) {
     const limit = parseInt(searchParams.get('limit') || '20');
     const offset = parseInt(searchParams.get('offset') || '0');
 
-    const where = {
-      AND: [
-        search ? {
-          OR: [
-            { name: { contains: search } },
-            { brewery: { contains: search } }
-          ]
-        } : {},
-        style ? { style: { contains: style } } : {}
-      ]
+    const mongo = await getMongoDB();
+    
+    const filter: { search?: string; style?: string } = {};
+    if (search) filter.search = search;
+    if (style) filter.style = style;
+    
+    const beers = await mongo.getBeers(filter, limit, offset);
+    const total = await mongo.countBeers(filter);
+
+    // Add ratings and review counts for each beer
+    const beersWithStats = await Promise.all(
+      beers.map(async (beer) => {
+        const stats = await mongo.getBeerReviewStats(beer._id);
+        return {
+          id: beer._id,
+          name: beer.name,
+          brewery: beer.brewery,
+          style: beer.style,
+          abv: beer.abv,
+          ibu: beer.ibu,
+          image: beer.image,
+          avgRating: stats.avgRating,
+          reviewCount: stats.totalReviews,
+        };
+      })
+    );
+
+    const result = {
+      technology: {
+        storage: 'MongoDB (beers collection)',
+        indexes: ['name_1', 'brewery_1', 'style_1'],
+      },
+      beers: beersWithStats,
+      total,
     };
 
-    const [beers, total] = await Promise.all([
-      db.beer.findMany({
-        where,
-        include: {
-          reviews: {
-            select: { rating: true }
-          },
-          _count: {
-            select: { reviews: true }
-          }
-        },
-        orderBy: { createdAt: 'desc' },
-        take: limit,
-        skip: offset
-      }),
-      db.beer.count({ where })
-    ]);
-
-    // Calculate average rating
-    const beersWithRating = beers.map(beer => {
-      const avgRating = beer.reviews.length > 0
-        ? beer.reviews.reduce((sum, r) => sum + r.rating, 0) / beer.reviews.length
-        : 0;
-      return {
-        ...beer,
-        avgRating: Math.round(avgRating * 10) / 10,
-        reviewCount: beer._count.reviews
-      };
-    });
-
-    return NextResponse.json({ beers: beersWithRating, total });
+    return NextResponse.json(result);
   } catch (error) {
     console.error('Get beers error:', error);
     return NextResponse.json(
@@ -63,15 +67,12 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST - Create new beer
+// POST - Criar cerveja
 export async function POST(request: NextRequest) {
   try {
     const user = await getCurrentUser();
     if (!user) {
-      return NextResponse.json(
-        { error: 'Não autenticado' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Não autenticado' }, { status: 401 });
     }
 
     const body = await request.json();
@@ -84,20 +85,24 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const beer = await db.beer.create({
-      data: {
-        name,
-        brewery,
-        style,
-        abv: parseFloat(abv),
-        ibu: ibu ? parseInt(ibu) : null,
-        description,
-        image,
-        country
-      }
+    const mongo = await getMongoDB();
+    
+    const beer = await mongo.createBeer({
+      name,
+      brewery,
+      style,
+      abv: parseFloat(abv),
+      ibu: ibu ? parseInt(ibu) : undefined,
+      description,
+      image,
+      country,
+      createdBy: user.id, // Associate beer with creator
     });
 
-    return NextResponse.json({ beer });
+    return NextResponse.json({
+      technology: { storage: 'MongoDB' },
+      beer,
+    }, { status: 201 });
   } catch (error) {
     console.error('Create beer error:', error);
     return NextResponse.json(
