@@ -66,7 +66,13 @@ export function AddBeerForm({ onBack, onSuccess }: AddBeerFormProps) {
         return;
       }
 
-      onSuccess(data.beer.id);
+      const createdBeerId = data?.beer?.id || data?.beer?._id;
+      if (!createdBeerId) {
+        setError('Cerveja criada, mas não foi possível abrir os detalhes');
+        return;
+      }
+
+      onSuccess(createdBeerId);
     } catch (error) {
       console.error('Error adding beer:', error);
       setError('Erro ao adicionar cerveja');

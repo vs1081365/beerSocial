@@ -95,6 +95,15 @@ class CassandraClient {
   private client: Client | null = null;
   private connected = false;
 
+  private sanitizeText(value: string): string {
+    const wellFormed = typeof value.toWellFormed === 'function' ? value.toWellFormed() : value;
+    return wellFormed.normalize('NFC').replace(/\u0000/g, '');
+  }
+
+  private isValidUuid(value: string): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+  }
+
   async connect(): Promise<void> {
     const contactPoints = (process.env.CASSANDRA_CONTACT_POINTS || 'localhost').split(',');
     const localDataCenter = process.env.CASSANDRA_DC || 'datacenter1';
@@ -278,11 +287,21 @@ class CassandraClient {
   ): Promise<void> {
     if (!this.client) throw new Error('Cassandra not connected');
 
+    // Timeline schema expects UUID columns for user/author/beer IDs.
+    if (!this.isValidUuid(review.author_id) || !this.isValidUuid(review.beer_id)) {
+      return;
+    }
+
+    const validUserIds = userIds.filter((userId) => this.isValidUuid(userId));
+    if (validUserIds.length === 0) {
+      return;
+    }
+
     const createdAt = new Date();
     const reviewId = Uuid.random();
     
     // Batch insert para múltiplos users (followers)
-    const queries = userIds.map(userId => ({
+    const queries = validUserIds.map(userId => ({
       query: `INSERT INTO user_timeline 
         (user_id, created_at, review_id, author_id, author_name, beer_id, beer_name, beer_style, rating, content, likes_count, comments_count)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -361,7 +380,11 @@ class CassandraClient {
   ): Promise<MessageRow> {
     if (!this.client) throw new Error('Cassandra not connected');
 
-    const conversationId = this.generateConversationId(senderId, receiverId);
+    const safeSenderId = this.sanitizeText(senderId);
+    const safeReceiverId = this.sanitizeText(receiverId);
+    const safeSenderName = this.sanitizeText(senderName);
+    const safeContent = this.sanitizeText(content);
+    const conversationId = this.generateConversationId(safeSenderId, safeReceiverId);
     const createdAt = new Date();
     const messageId = types.Uuid.fromString(randomUUID());
 
@@ -373,10 +396,10 @@ class CassandraClient {
       conversationId,
       createdAt,
       messageId,
-      senderId,
-      receiverId,
-      senderName,
-      content,
+      safeSenderId,
+      safeReceiverId,
+      safeSenderName,
+      safeContent,
       false,
     ], { prepare: true });
 
@@ -384,10 +407,10 @@ class CassandraClient {
       conversation_id: conversationId,
       created_at: createdAt,
       message_id: messageId.toString(),
-      sender_id: senderId,
-      receiver_id: receiverId,
-      sender_name: senderName,
-      content,
+      sender_id: safeSenderId,
+      receiver_id: safeReceiverId,
+      sender_name: safeSenderName,
+      content: safeContent,
       is_read: false,
     };
   }
@@ -624,6 +647,11 @@ class CassandraClient {
 
   async followUser(userId: string, followerId: string, followerName: string): Promise<void> {
     if (!this.client) throw new Error('Cassandra not connected');
+
+    // Cassandra schema uses UUID for user IDs; skip sync when app IDs are not UUID.
+    if (!this.isValidUuid(userId) || !this.isValidUuid(followerId)) {
+      return;
+    }
 
     const followedAt = new Date();
 

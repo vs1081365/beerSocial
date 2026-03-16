@@ -10,7 +10,31 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getMongoDB } from '@/lib/mongodb-client';
 import { getCurrentUser } from '@/lib/auth';
-import { getRedis } from '@/lib/redis-client';
+import { publishBeerCreatedEvent } from '@/lib/realtime/beer-events';
+
+function summarizeBeerField(value: unknown) {
+  if (typeof value === 'string') {
+    return {
+      type: 'string',
+      length: value.length,
+      preview: value.slice(0, 120),
+    };
+  }
+
+  if (typeof value === 'number') {
+    return { type: 'number', value };
+  }
+
+  if (value === null) {
+    return { type: 'null' };
+  }
+
+  if (value === undefined) {
+    return { type: 'undefined' };
+  }
+
+  return { type: typeof value };
+}
 
 // GET - Listar cervejas
 export async function GET(request: NextRequest) {
@@ -78,6 +102,20 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { name, brewery, style, abv, ibu, description, image, country } = body;
 
+    console.info('Create beer request received', {
+      userId: user.id,
+      payload: {
+        name: summarizeBeerField(name),
+        brewery: summarizeBeerField(brewery),
+        style: summarizeBeerField(style),
+        abv: summarizeBeerField(abv),
+        ibu: summarizeBeerField(ibu),
+        description: summarizeBeerField(description),
+        image: summarizeBeerField(image),
+        country: summarizeBeerField(country),
+      },
+    });
+
     if (!name || !brewery || !style || !abv) {
       return NextResponse.json(
         { error: 'Nome, cervejeira, estilo e ABV são obrigatórios' },
@@ -86,8 +124,8 @@ export async function POST(request: NextRequest) {
     }
 
     const mongo = await getMongoDB();
-    
-    const beer = await mongo.createBeer({
+
+    const beerInput = {
       name,
       brewery,
       style,
@@ -96,12 +134,54 @@ export async function POST(request: NextRequest) {
       description,
       image,
       country,
-      createdBy: user.id, // Associate beer with creator
+      createdBy: user.id,
+    };
+
+    console.info('Create beer input prepared', {
+      userId: user.id,
+      beerInput: {
+        name: summarizeBeerField(beerInput.name),
+        brewery: summarizeBeerField(beerInput.brewery),
+        style: summarizeBeerField(beerInput.style),
+        abv: summarizeBeerField(beerInput.abv),
+        ibu: summarizeBeerField(beerInput.ibu),
+        description: summarizeBeerField(beerInput.description),
+        image: summarizeBeerField(beerInput.image),
+        country: summarizeBeerField(beerInput.country),
+        createdBy: summarizeBeerField(beerInput.createdBy),
+      },
+    });
+
+    const beer = await mongo.createBeer(beerInput);
+
+    console.info('Beer created successfully', {
+      beerId: beer._id,
+      userId: user.id,
+      name: beer.name,
+    });
+
+    const normalizedBeer = {
+      id: beer._id,
+      ...beer,
+    };
+
+    await publishBeerCreatedEvent({
+      type: 'BEER_CREATED',
+      beerId: normalizedBeer.id,
+      name: normalizedBeer.name,
+      brewery: normalizedBeer.brewery,
+      createdBy: user.id,
+      createdAt: new Date().toISOString(),
+    });
+
+    console.info('Beer created event published', {
+      beerId: normalizedBeer.id,
+      userId: user.id,
     });
 
     return NextResponse.json({
       technology: { storage: 'MongoDB' },
-      beer,
+      beer: normalizedBeer,
     }, { status: 201 });
   } catch (error) {
     console.error('Create beer error:', error);

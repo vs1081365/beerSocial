@@ -57,6 +57,7 @@ interface Review {
 }
 
 type ViewType = 'feed' | 'beer' | 'profile' | 'chat' | 'add-beer' | 'friends' | 'my-reviews' | 'search';
+const FEED_AUTO_REFRESH_MS = 15000;
 
 export default function Home() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -83,6 +84,48 @@ export default function Home() {
     }
   }, [view]);
 
+  // Realtime updates: refresh feed when another user creates a beer.
+  useEffect(() => {
+    if (view !== 'feed') return;
+
+    const source = new EventSource('/api/events/beers');
+
+    const onBeerCreated = () => {
+      void loadData(false);
+    };
+
+    source.addEventListener('beer.created', onBeerCreated);
+
+    return () => {
+      source.removeEventListener('beer.created', onBeerCreated);
+      source.close();
+    };
+  }, [view]);
+
+  // Keep feed fresh across different users without requiring manual refresh.
+  useEffect(() => {
+    if (view !== 'feed') return;
+
+    const refreshFeed = () => {
+      if (document.hidden) return;
+      void loadData(false);
+    };
+
+    const interval = window.setInterval(refreshFeed, FEED_AUTO_REFRESH_MS);
+    const onVisibilityChange = () => {
+      if (!document.hidden) {
+        refreshFeed();
+      }
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [view]);
+
   const checkAuth = async () => {
     try {
       const res = await fetch('/api/auth/me');
@@ -97,8 +140,10 @@ export default function Home() {
     }
   };
 
-  const loadData = async () => {
-    setIsLoading(true);
+  const loadData = async (showLoader = true) => {
+    if (showLoader) {
+      setIsLoading(true);
+    }
     try {
       const [beersRes, reviewsRes] = await Promise.all([
         fetch('/api/beers?limit=12'),
@@ -117,7 +162,9 @@ export default function Home() {
     } catch (error) {
       console.error('Error loading data:', error);
     } finally {
-      setIsLoading(false);
+      if (showLoader) {
+        setIsLoading(false);
+      }
     }
   };
 
