@@ -13,6 +13,7 @@ import { NextResponse } from 'next/server';
 import { getRedis } from '@/lib/redis-client';
 import { getMongoDB } from '@/lib/mongodb-client';
 import { getCassandra } from '@/lib/cassandra-client';
+import type { NotificationDocument } from '@/lib/mongodb-client';
 
 export async function GET() {
   const status = {
@@ -124,7 +125,7 @@ export async function POST() {
 
     // Check notification (same logic as reviews API)
     const beerFromDb = await mongo.getBeerById(beer._id);
-    let notification = null;
+    let notification: NotificationDocument | null = null;
     let conditionCheck = {
       beerExists: !!beerFromDb,
       hasCreator: !!beerFromDb?.createdBy,
@@ -176,10 +177,11 @@ export async function POST() {
       } : null,
       conditionCheck
     });
-  } catch (error) {
+  } catch (error: unknown) {
     console.error('Test beer notification error:', error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
     return NextResponse.json(
-      { error: 'Failed to test beer notifications: ' + error.message },
+      { error: 'Failed to test beer notifications: ' + errorMessage },
       { status: 500 }
     );
   }

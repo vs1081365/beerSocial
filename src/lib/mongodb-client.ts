@@ -178,7 +178,7 @@ class MongoDBClient {
     const sanitizedValue = this.sanitizeDocument(value);
 
     try {
-      BSON.serialize(sanitizedValue);
+      BSON.serialize(sanitizedValue as Document);
       return sanitizedValue;
     } catch (error) {
       console.error(`Invalid BSON payload for ${context}:`, error);
@@ -476,13 +476,13 @@ class MongoDBClient {
       .sort({ createdAt: -1 })
       .skip(offset)
       .limit(limit)
-      .toArray();
+      .toArray() as Promise<BeerDocument[]>;
   }
 
  
   async getAllBeers(): Promise<BeerDocument[]> {
     if (!this.beers) throw new Error('MongoDB not connected');
-    return this.beers.find({}).project(BEER_SAFE_PROJECTION).sort({ createdAt: -1 }).toArray();
+    return this.beers.find({}).project(BEER_SAFE_PROJECTION).sort({ createdAt: -1 }).toArray() as Promise<BeerDocument[]>;
   }
 
   async countBeers(filter: { search?: string; style?: string } = {}): Promise<number> {
