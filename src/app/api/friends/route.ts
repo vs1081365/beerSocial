@@ -38,11 +38,31 @@ export async function GET(request: NextRequest) {
     // Obter amigos aceites
     const friendships = await mongo.getFriends(user.id);
     
-    // Mapear para lista de amigos
-    const friends = friendships.map(f => 
-      f.requesterId === user.id 
-        ? { id: f.addresseeId, name: f.addresseeName }
-        : { id: f.requesterId, name: f.requesterName }
+    // Mapear para lista de amigos - resolve nomes via MongoDB quando disponível
+    const userCache = new Map<string, { name: string; username: string; avatar: string | null }>();
+
+    const friends = await Promise.all(
+      friendships.map(async (f) => {
+        const isRequester = f.requesterId === user.id;
+        const otherId = isRequester ? f.addresseeId : f.requesterId;
+        const storedName = isRequester ? f.addresseeName : f.requesterName;
+
+        if (!userCache.has(otherId)) {
+          const otherUser = await mongo.getUserById(otherId);
+          const name = otherUser?.name || storedName || 'Unknown User';
+          const username = otherUser?.username || (name || 'unknown').toLowerCase().replace(/\s+/g, '');
+          const avatar = otherUser?.avatar || null;
+          userCache.set(otherId, { name, username, avatar });
+        }
+
+        const cached = userCache.get(otherId)!;
+        return {
+          id: otherId,
+          name: cached.name,
+          username: cached.username,
+          avatar: cached.avatar,
+        };
+      })
     );
 
     // Obter pedidos pendentes recebidos
@@ -154,12 +174,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Garantir que armazenamos o nome do addressee para uso futuro
+    const resolvedAddresseeName = addresseeName || (await mongo.getUserById(addresseeId))?.name || '';
+
     // Criar amizade no MongoDB
     const friendship = await mongo.createFriendship({
       requesterId: user.id,
       requesterName: user.name,
       addresseeId,
-      addresseeName,
+      addresseeName: resolvedAddresseeName,
     });
 
     // Criar notificação

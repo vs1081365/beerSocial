@@ -32,16 +32,38 @@ export async function GET(request: NextRequest) {
       const messages = await cassandra.getConversation(user.id, otherUserId, limit);
 
       // Transform messages to match frontend expectations
-      const transformedMessages = messages.map(message => ({
-        id: message.message_id || `msg_${Date.now()}_${Math.random()}`,
-        content: message.content || '',
-        createdAt: message.created_at?.toISOString() || new Date().toISOString(),
-        sender: {
-          id: message.sender_id || '',
-          name: message.sender_name || 'Unknown User',
-          username: (message.sender_name || 'unknown').toLowerCase().replace(/\s+/g, ''),
-          avatar: null, // TODO: Add avatar support
-        },
+      // If sender_name is missing (e.g. legacy messages), we fetch it from MongoDB.
+      const mongo = await getMongoDB();
+      const userNameCache = new Map<string, string>();
+
+      const transformedMessages = await Promise.all(messages.map(async (message) => {
+        const senderId = message.sender_id || '';
+        let senderName = message.sender_name || '';
+
+        if (!senderName && senderId) {
+          if (userNameCache.has(senderId)) {
+            senderName = userNameCache.get(senderId)!;
+          } else {
+            const senderUser = await mongo.getUserById(senderId);
+            senderName = senderUser?.name || 'Unknown User';
+            userNameCache.set(senderId, senderName);
+          }
+        }
+
+        const safeName = senderName || 'Unknown User';
+        const username = (safeName || 'unknown').toLowerCase().replace(/\s+/g, '') || 'unknown';
+
+        return {
+          id: message.message_id || `msg_${Date.now()}_${Math.random()}`,
+          content: message.content || '',
+          createdAt: message.created_at?.toISOString() || new Date().toISOString(),
+          sender: {
+            id: senderId,
+            name: safeName,
+            username,
+            avatar: null, // TODO: Add avatar support
+          },
+        };
       }));
 
       return NextResponse.json({
@@ -73,10 +95,9 @@ export async function GET(request: NextRequest) {
           // Find the other participant (not the current user)
           const otherParticipantIndex = conv.participants.findIndex(p => p !== user.id);
           const otherParticipantId = conv.participants[otherParticipantIndex];
-          const otherParticipantName = conv.participantNames[otherParticipantIndex];
-
-          // Get user details for avatar
+          // Get user details for avatar and as a fallback for names
           const otherUser = await mongo.getUserById(otherParticipantId);
+          const otherParticipantName = conv.participantNames?.[otherParticipantIndex] || otherUser?.name || 'Unknown User';
 
           return {
             id: conv._id,

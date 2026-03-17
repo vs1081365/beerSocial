@@ -182,12 +182,18 @@ export function BeerDetail({
       <Card>
         <div className="flex flex-col md:flex-row">
           {/* Beer Image */}
-          <div className="w-full md:w-48 h-48 bg-gradient-to-br from-amber-100 to-amber-200 flex items-center justify-center flex-shrink-0">
+          <div className="w-full md:w-48 h-48 bg-white flex items-center justify-center flex-shrink-0 overflow-hidden">
             {beer.image ? (
               <img 
                 src={beer.image} 
                 alt={beer.name}
-                className="w-full h-full object-cover"
+                className="w-full h-full object-contain object-center"
+                loading="lazy"
+                style={{
+                  maxWidth: '100%',
+                  maxHeight: '100%',
+                  display: 'block'
+                }}
               />
             ) : (
               <Beer className="h-24 w-24 text-amber-400" />
