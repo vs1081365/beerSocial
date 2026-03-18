@@ -59,6 +59,47 @@ export async function GET(request: NextRequest) {
   }
 }
 
+// POST - Criar notificação (para o utilizador atual)
+export async function POST(request: NextRequest) {
+  try {
+    const user = await getCurrentUser();
+    if (!user) {
+      return NextResponse.json({ error: 'Não autenticado' }, { status: 401 });
+    }
+
+    const body = await request.json();
+    const { type, title, message, data } = body;
+
+    if (!type || !title || !message) {
+      return NextResponse.json(
+        { error: 'type, title e message são obrigatórios' },
+        { status: 400 }
+      );
+    }
+
+    const mongo = await getMongoDB();
+    await mongo.createNotification({
+      userId: user.id,
+      type,
+      title,
+      message,
+      data: data ? JSON.stringify(data) : JSON.stringify({}),
+    });
+
+    // invalidar cache de notificações não-lidas
+    const redis = await getRedis();
+    await redis.deleteCache(`notifications:${user.id}:count`);
+
+    return NextResponse.json({ success: true }, { status: 201 });
+  } catch (error) {
+    console.error('Create notification error:', error);
+    return NextResponse.json(
+      { error: 'Erro ao criar notificação' },
+      { status: 500 }
+    );
+  }
+}
+
 // PUT - Marcar como lida
 export async function PUT(request: NextRequest) {
   try {
