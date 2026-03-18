@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useToast } from '@/hooks/use-toast';
 import { Header } from '@/components/app/Header';
 import { BeerCard } from '@/components/app/BeerCard';
 import { ReviewCard } from '@/components/app/ReviewCard';
@@ -84,13 +85,45 @@ export default function Home() {
     }
   }, [view]);
 
+  const { toast } = useToast();
+
   // Realtime updates: refresh feed when another user creates a beer.
   useEffect(() => {
     if (view !== 'feed') return;
 
     const source = new EventSource('/api/events/beers');
 
-    const onBeerCreated = () => {
+    const onBeerCreated = async (event: MessageEvent) => {
+      try {
+        const data = JSON.parse(event.data);
+
+        toast({
+          title: 'Nova cerveja adicionada',
+          description: `${data.name} (${data.brewery})`,
+        });
+
+        // Criar notificação persistida para o utilizador atual (não para quem criou)
+        if (currentUser && data.createdBy !== currentUser.id) {
+          const res = await fetch('/api/notifications', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type: 'NEW_BEER',
+              title: 'Nova cerveja',
+              message: `${data.name} de ${data.brewery} foi adicionada`,
+              data: JSON.stringify({ beerId: data.beerId }),
+            }),
+          });
+
+          if (res.ok) {
+            // Atualiza o contador/lista de notificações imediatamente
+            window.dispatchEvent(new Event('beersocial:refreshNotifications'));
+          }
+        }
+      } catch {
+        // ignore malformed events
+      }
+
       void loadData(false);
     };
 
@@ -100,7 +133,7 @@ export default function Home() {
       source.removeEventListener('beer.created', onBeerCreated);
       source.close();
     };
-  }, [view]);
+  }, [view, toast]);
 
   // Keep feed fresh across different users without requiring manual refresh.
   useEffect(() => {
