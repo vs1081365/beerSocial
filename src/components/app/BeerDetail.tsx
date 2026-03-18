@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Slider } from '@/components/ui/slider';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Star, Beer, ArrowLeft, Loader2, Heart, MessageSquare, MapPin } from 'lucide-react';
+import { Star, Beer, ArrowLeft, Loader2, Heart, MessageSquare, MapPin, Eye } from 'lucide-react';
 
 interface BeerDetailProps {
   beerId: string;
@@ -208,6 +208,12 @@ export function BeerDetail({
                 <p className="text-sm text-muted-foreground">
                   {beer.reviewCount} avaliações
                 </p>
+                {beer.viewsToday > 0 && (
+                  <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
+                    <Eye className="h-3 w-3" />
+                    {beer.viewsToday} views hoje
+                  </p>
+                )}
               </div>
             </div>
             
