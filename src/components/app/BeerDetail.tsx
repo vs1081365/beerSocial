@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Slider } from '@/components/ui/slider';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Star, Beer, ArrowLeft, Loader2, Heart, MessageSquare, MapPin } from 'lucide-react';
+import { Star, Beer, ArrowLeft, Loader2, Heart, MessageSquare, MapPin, Eye } from 'lucide-react';
 
 interface BeerDetailProps {
   beerId: string;
@@ -182,18 +182,12 @@ export function BeerDetail({
       <Card>
         <div className="flex flex-col md:flex-row">
           {/* Beer Image */}
-          <div className="w-full md:w-48 h-48 bg-white flex items-center justify-center flex-shrink-0 overflow-hidden">
+          <div className="w-full md:w-48 h-48 bg-gradient-to-br from-amber-100 to-amber-200 flex items-center justify-center flex-shrink-0">
             {beer.image ? (
               <img 
                 src={beer.image} 
                 alt={beer.name}
-                className="w-full h-full object-contain object-center"
-                loading="lazy"
-                style={{
-                  maxWidth: '100%',
-                  maxHeight: '100%',
-                  display: 'block'
-                }}
+                className="w-full h-full object-cover"
               />
             ) : (
               <Beer className="h-24 w-24 text-amber-400" />
@@ -214,6 +208,12 @@ export function BeerDetail({
                 <p className="text-sm text-muted-foreground">
                   {beer.reviewCount} avaliações
                 </p>
+                {beer.viewsToday > 0 && (
+                  <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
+                    <Eye className="h-3 w-3" />
+                    {beer.viewsToday} views hoje
+                  </p>
+                )}
               </div>
             </div>
             
