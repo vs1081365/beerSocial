@@ -84,10 +84,14 @@ export async function GET(
     // Buscar do MongoDB
     const mongo = await getMongoDB();
     
-    const [beer, reviews, stats] = await Promise.all([
+    // Track view in Redis (fire-and-forget, does not block response)
+    redis.trackBeerView(id).catch(() => {});
+
+    const [beer, reviews, stats, viewsToday] = await Promise.all([
       mongo.getBeerById(id),
       mongo.getReviewsByBeer(id, 20),
       mongo.getBeerReviewStats(id),
+      redis.getBeerViewsToday(id),
     ]);
 
     if (!beer) {
@@ -126,6 +130,7 @@ export async function GET(
         ...beer,
         avgRating: stats.avgRating,
         reviewCount: stats.totalReviews,
+        viewsToday,
       },
       reviews: transformedReviews,
     };
