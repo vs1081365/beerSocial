@@ -33,7 +33,7 @@ export async function GET(request: NextRequest) {
     const cacheKey = `reviews:${beerId || userId || 'all'}:${limit}:${offset}`;
     const cached = await redis.getCache(cacheKey);
     if (cached) {
-      return NextResponse.json(JSON.parse(cached));
+      return NextResponse.json(cached);
     }
 
     const mongo = await getMongoDB();
@@ -103,7 +103,7 @@ export async function GET(request: NextRequest) {
       },
       reviews: transformedReviews,
     };
-    await redis.setCache(cacheKey, JSON.stringify(response), 30);
+    await redis.setCache(cacheKey, response, 30);
     return NextResponse.json(response);
   } catch (error) {
     console.error('Get reviews error:', error);

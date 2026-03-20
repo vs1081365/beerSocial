@@ -65,6 +65,8 @@ export function ChatWindow({ otherUser, currentUserId, currentUserName, onBack }
       const res = await fetch(`/api/messages?userId=${otherUser.id}`, { credentials: 'include' });
       const data = await res.json();
       setMessages(data.messages || []);
+      // Notifica o Header para atualizar o badge de mensagens não lidas
+      window.dispatchEvent(new Event('beersocial:refreshMessages'));
     } catch (error) {
       console.error('Error fetching messages:', error);
       setMessages([]);

@@ -66,6 +66,10 @@ export async function GET(request: NextRequest) {
         };
       }));
 
+      // Limpar não lidos deste remetente ao abrir a conversa
+      const redis = await getRedis();
+      await redis.clearUnreadMessagesFrom(user.id, otherUserId);
+
       return NextResponse.json({
         technology: {
           storage: 'Cassandra (messages table)',
@@ -115,12 +119,17 @@ export async function GET(request: NextRequest) {
         })
       );
 
+      // Obter total de mensagens não lidas (soma de todos os remetentes)
+      const redis = await getRedis();
+      const unreadCount = await redis.getTotalUnreadMessages(user.id);
+
       return NextResponse.json({
         technology: {
           storage: 'MongoDB (para metadata de conversas)',
           messages: 'Cassandra (para mensagens)',
         },
         conversations,
+        unreadCount,
       });
     }
   } catch (error) {
@@ -208,6 +217,9 @@ export async function POST(request: NextRequest) {
     // Notificar via Redis Pub/Sub (tempo real)
     const redis = await getRedis();
     await redis.notifyNewMessage(receiverId, user.id, content);
+
+    // Incrementar contador de mensagens não lidas por remetente
+    await redis.incrementUnreadMessages(receiverId, user.id);
 
     return NextResponse.json({
       technology: {

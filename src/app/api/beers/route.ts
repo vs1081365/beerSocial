@@ -56,7 +56,7 @@ export async function GET(request: NextRequest) {
     const cacheKey = `beers:list:${search}:${style}:${limit}:${offset}`;
     const cached = await redis.getCache(cacheKey);
     if (cached) {
-      return NextResponse.json(JSON.parse(cached));
+      return NextResponse.json(cached);
     }
 
     // Track recent searches (fire-and-forget, needs auth)
@@ -105,7 +105,7 @@ export async function GET(request: NextRequest) {
       total,
     };
 
-    await redis.setCache(cacheKey, JSON.stringify(result), 60);
+    await redis.setCache(cacheKey, result, 60);
     return NextResponse.json(result);
   } catch (error) {
     console.error('Get beers error:', error);
