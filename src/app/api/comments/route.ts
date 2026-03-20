@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getMongoDB } from '@/lib/mongodb-client';
 import { getCurrentUser } from '@/lib/auth';
 import { getRedis } from '@/lib/redis-client';
+import { getCassandra } from '@/lib/cassandra-client';
 
 // GET - List comments for a review
 export async function GET(request: NextRequest) {
@@ -27,6 +28,12 @@ export async function GET(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    // Redis cache
+    const redis = await getRedis();
+    const cacheKey = `comments:${reviewId}`;
+    const cached = await redis.getCache(cacheKey);
+    if (cached) return NextResponse.json({ ...cached as object, _cached: true });
 
     const mongo = await getMongoDB();
     const review = await mongo.getReviewById(reviewId);
@@ -72,15 +79,21 @@ export async function GET(request: NextRequest) {
       })
     );
 
-    return NextResponse.json({
+    const result = {
       technology: {
         storage: 'MongoDB (embedded in review document)',
         structure: 'review.comments[] - array de documentos',
         advantage: 'Uma única query obtém review + todos os comments',
         transformation: 'User info fetched and merged for each comment',
+        cache: 'Redis (TTL 60s)',
       },
       comments: transformedComments,
-    });
+    };
+
+    // Cache for 60 s
+    await redis.setCache(cacheKey, result, 60);
+
+    return NextResponse.json(result);
   } catch (error) {
     console.error('Get comments error:', error);
     return NextResponse.json(
@@ -109,6 +122,20 @@ export async function POST(request: NextRequest) {
         { error: 'Review e conteúdo são obrigatórios' },
         { status: 400 }
       );
+    }
+
+    // Cassandra: rate limit (20 comments per hour per user)
+    try {
+      const cassandra = await getCassandra();
+      const allowed = await cassandra.checkRateLimit(user.id, 'comment', 20, 3600);
+      if (!allowed) {
+        return NextResponse.json(
+          { error: 'Limite de comentários atingido. Aguarda antes de adicionar mais.' },
+          { status: 429 }
+        );
+      }
+    } catch (e) {
+      console.warn('Cassandra rate limit check failed (allowing request):', e);
     }
 
     const mongo = await getMongoDB();
@@ -141,18 +168,41 @@ export async function POST(request: NextRequest) {
         message: `${user.name} comentou na sua review`,
         data: JSON.stringify({ reviewId }),
       });
+
+      // Invalidar cache de notificações + publicar via Redis Pub/Sub
+      const redis = await getRedis();
+      await redis.deleteCache(`notifications:${review.userId}:count`);
+      await redis.publish(`user:${review.userId}:notifications`, JSON.stringify({
+        type: 'NEW_COMMENT',
+        timestamp: Date.now(),
+      }));
     }
 
-    // Invalidar cache
+    // Invalidar caches de comments e reviews
     const redis = await getRedis();
-    await redis.invalidatePattern(`reviews:*`);
-    await redis.invalidatePattern(`beer:${review?.beerId}`);
+    await Promise.all([
+      redis.deleteCache(`comments:${reviewId}`),
+      redis.invalidatePattern(`reviews:*`),
+      redis.invalidatePattern(`beer:${review?.beerId}`),
+    ]);
+
+    // Cassandra: activity log
+    try {
+      if (review) {
+        const cassandra = await getCassandra();
+        await cassandra.logActivity(user.id, 'COMMENT', review.beerId, review.beerName);
+      }
+    } catch (e) {
+      console.warn('Cassandra logActivity failed:', e);
+    }
 
     return NextResponse.json({
       technology: {
         operation: '$push - adicionar elemento ao array embedded',
         notification: 'MongoDB (notifications collection)',
+        pubsub: 'Redis Pub/Sub (SSE real-time)',
         cacheInvalidation: 'Redis',
+        activityLog: 'Cassandra (user_activity)',
       },
       success: true,
     });

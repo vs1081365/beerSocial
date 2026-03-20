@@ -6,6 +6,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { loginUser } from '@/lib/auth';
+import { getRedis } from '@/lib/redis-client';
 
 export async function POST(request: NextRequest) {
   try {
@@ -28,11 +29,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Mark user as online in Redis
+    if (result.user?.id) {
+      const redis = await getRedis();
+      await redis.setUserOnline(result.user.id).catch(() => {});
+    }
+
     return NextResponse.json({
       user: result.user,
       technology: {
         storage: 'MongoDB',
         session: 'Redis (hash com TTL 24h)',
+        online: 'Redis set (online_users)',
       }
     });
   } catch (error) {

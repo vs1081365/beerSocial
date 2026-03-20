@@ -22,13 +22,54 @@ export interface SessionUser {
   avatar?: string;
 }
 
-// Hash simples para passwords (em produção usar bcrypt)
+// Hash de password com PBKDF2 e salt único por utilizador
+function generateSalt(): string {
+  const array = new Uint8Array(16);
+  crypto.getRandomValues(array);
+  return Array.from(array).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 async function hashPassword(password: string): Promise<string> {
+  const salt = generateSalt();
   const encoder = new TextEncoder();
-  const data = encoder.encode(password + 'beersocial_salt_2024');
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(password),
+    { name: 'PBKDF2' },
+    false,
+    ['deriveBits']
+  );
+  const hashBuffer = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt: encoder.encode(salt), iterations: 100000, hash: 'SHA-256' },
+    keyMaterial,
+    256
+  );
+  const hashHex = Array.from(new Uint8Array(hashBuffer))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+  return `${salt}:${hashHex}`;
+}
+
+async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
+  const [salt, hash] = storedHash.split(':');
+  if (!salt || !hash) return false;
+  const encoder = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(password),
+    { name: 'PBKDF2' },
+    false,
+    ['deriveBits']
+  );
+  const hashBuffer = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt: encoder.encode(salt), iterations: 100000, hash: 'SHA-256' },
+    keyMaterial,
+    256
+  );
+  const hashHex = Array.from(new Uint8Array(hashBuffer))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+  return hashHex === hash;
 }
 
 // Registrar utilizador
@@ -104,8 +145,8 @@ export async function loginUser(
     }
     
     // Verificar password
-    const hashedPassword = await hashPassword(password);
-    if (user.password !== hashedPassword) {
+    const passwordValid = await verifyPassword(password, user.password);
+    if (!passwordValid) {
       return { success: false, error: 'Credenciais inválidas' };
     }
     

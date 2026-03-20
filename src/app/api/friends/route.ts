@@ -38,29 +38,16 @@ export async function GET(request: NextRequest) {
     // Obter amigos aceites
     const friendships = await mongo.getFriends(user.id);
     
-    // Mapear para lista de amigos - resolve nomes via MongoDB quando disponível
-    const userCache = new Map<string, { name: string; username: string; avatar: string | null }>();
-
+    // Mapear para lista de amigos com dados completos do MongoDB
     const friends = await Promise.all(
       friendships.map(async (f) => {
-        const isRequester = f.requesterId === user.id;
-        const otherId = isRequester ? f.addresseeId : f.requesterId;
-        const storedName = isRequester ? f.addresseeName : f.requesterName;
-
-        if (!userCache.has(otherId)) {
-          const otherUser = await mongo.getUserById(otherId);
-          const name = otherUser?.name || storedName || 'Unknown User';
-          const username = otherUser?.username || (name || 'unknown').toLowerCase().replace(/\s+/g, '');
-          const avatar = otherUser?.avatar || null;
-          userCache.set(otherId, { name, username, avatar });
-        }
-
-        const cached = userCache.get(otherId)!;
+        const otherId = f.requesterId === user.id ? f.addresseeId : f.requesterId;
+        const otherUser = await mongo.getUserById(otherId).catch(() => null);
         return {
           id: otherId,
-          name: cached.name,
-          username: cached.username,
-          avatar: cached.avatar,
+          name: otherUser?.name ?? (f.requesterId === user.id ? f.addresseeName : f.requesterName),
+          username: otherUser?.username ?? '',
+          avatar: otherUser?.avatar ?? null,
         };
       })
     );
@@ -71,27 +58,22 @@ export async function GET(request: NextRequest) {
     // Buscar informações completas dos requesters
     const pendingRequests = (await Promise.all(
       pendingRequestsRaw.map(async (req) => {
-        try {
-          const requester = await mongo.getUserById(req.requesterId);
-          if (!requester) {
-            console.warn(`Requester not found for friendship ${req._id}, requesterId: ${req.requesterId}`);
-            return null;
-          }
-          return {
-            id: req._id,
-            requester: {
-              id: requester._id,
-              name: requester.name,
-              username: requester.username,
-              avatar: requester.avatar
-            }
-          };
-        } catch (error) {
-          console.error(`Error fetching requester for friendship ${req._id}:`, error);
+        const requester = await mongo.getUserById(req.requesterId).catch(() => null);
+        if (!requester) {
+          console.warn(`Requester not found for friendship ${req._id}, requesterId: ${req.requesterId}`);
           return null;
         }
+        return {
+          id: req._id,
+          requester: {
+            id: String(requester._id),
+            name: requester.name,
+            username: requester.username,
+            avatar: requester.avatar ?? null,
+          },
+        };
       })
-    )).filter(req => req !== null);
+    )).filter(Boolean);
 
     // Obter pedidos enviados
     const sentRequestsRaw = await mongo.getSentRequests(user.id);
@@ -165,9 +147,9 @@ export async function POST(request: NextRequest) {
 
     const mongo = await getMongoDB();
     
-    // Verificar se já existe amizade
+    // Check for existing PENDING or ACCEPTED friendship only (allow re-request after rejection)
     const existing = await mongo.getFriendshipBetween(user.id, addresseeId);
-    if (existing) {
+    if (existing && existing.status !== 'REJECTED') {
       return NextResponse.json(
         { error: 'Já existe um pedido de amizade' },
         { status: 400 }
@@ -178,6 +160,33 @@ export async function POST(request: NextRequest) {
     const resolvedAddresseeName = addresseeName || (await mongo.getUserById(addresseeId))?.name || '';
 
     // Criar amizade no MongoDB
+    // If a previous REJECTED friendship exists, replace it
+    if (existing?.status === 'REJECTED') {
+      await mongo.updateFriendshipStatus(existing._id as string, 'PENDING');
+      const updatedFriendship = await mongo.getFriendshipById(existing._id as string);
+
+      await mongo.createNotification({
+        userId: addresseeId,
+        type: 'FRIEND_REQUEST',
+        title: 'Pedido de Amizade',
+        message: `${user.name} quer ser seu amigo`,
+        data: JSON.stringify({ friendshipId: existing._id, requesterId: user.id }),
+      });
+
+      const redis = await getRedis();
+      await Promise.all([
+        redis.deleteCache(`friends:${user.id}`),
+        redis.deleteCache(`friends:${addresseeId}`),
+        redis.deleteCache(`notifications:${addresseeId}:count`),
+      ]);
+      await redis.publish(`user:${addresseeId}:notifications`, JSON.stringify({
+        type: 'FRIEND_REQUEST',
+        timestamp: Date.now(),
+      }));
+
+      return NextResponse.json({ friendship: updatedFriendship });
+    }
+
     const friendship = await mongo.createFriendship({
       requesterId: user.id,
       requesterName: user.name,
@@ -199,8 +208,14 @@ export async function POST(request: NextRequest) {
     await Promise.all([
       redis.deleteCache(`friends:${user.id}`),
       redis.deleteCache(`friends:${addresseeId}`),
-      redis.deleteCache(`notifications:${addresseeId}:count`), // Invalidar cache de contador de notificações
+      redis.deleteCache(`notifications:${addresseeId}:count`),
     ]);
+
+    // Notificar destinatário via Redis Pub/Sub (SSE em tempo real)
+    await redis.publish(`user:${addresseeId}:notifications`, JSON.stringify({
+      type: 'FRIEND_REQUEST',
+      timestamp: Date.now(),
+    }));
 
     return NextResponse.json({
       technology: {
@@ -272,7 +287,14 @@ export async function PUT(request: NextRequest) {
       await Promise.all([
         redis.deleteCache(`friends:${user.id}`),
         redis.deleteCache(`friends:${friendship.requesterId}`),
+        redis.deleteCache(`notifications:${friendship.requesterId}:count`),
       ]);
+
+      // Notificar requester via Redis Pub/Sub (SSE em tempo real)
+      await redis.publish(`user:${friendship.requesterId}:notifications`, JSON.stringify({
+        type: 'FRIEND_ACCEPTED',
+        timestamp: Date.now(),
+      }));
 
       return NextResponse.json({
         technology: {

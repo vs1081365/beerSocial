@@ -22,8 +22,12 @@ import { Client, DseClientOptions, types } from 'cassandra-driver';
 import { randomUUID } from 'crypto';
 
 const { Uuid, TimeUuid } = types;
-const reviewId = Uuid.random();
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isValidUuid = (id: string) => UUID_REGEX.test(id);
+
+/** Converts a string to a Cassandra Uuid, or returns null if not a valid UUID. */
+const toUuid = (id: string) => isValidUuid(id) ? Uuid.fromString(id) : null;
 
 // Tipos para as tabelas
 export interface UserTimelineRow {
@@ -287,13 +291,10 @@ class CassandraClient {
   ): Promise<void> {
     if (!this.client) throw new Error('Cassandra not connected');
 
-    // Timeline schema expects UUID columns for user/author/beer IDs.
-    if (!this.isValidUuid(review.author_id) || !this.isValidUuid(review.beer_id)) {
-      return;
-    }
-
-    const validUserIds = userIds.filter((userId) => this.isValidUuid(userId));
-    if (validUserIds.length === 0) {
+    // Filter out any non-UUID IDs (MongoDB ObjectIds are not UUIDs)
+    const validUserIds = userIds.filter(isValidUuid);
+    if (!isValidUuid(review.author_id) || !isValidUuid(review.beer_id) || validUserIds.length === 0) {
+      console.warn('addToTimeline: skipping — IDs are not UUID format');
       return;
     }
 
@@ -353,6 +354,10 @@ class CassandraClient {
   // Update counter para likes (Cassandra counter update)
   async incrementTimelineLikes(reviewId: string, userId: string, createdAt: Date): Promise<void> {
     if (!this.client) throw new Error('Cassandra not connected');
+    if (!isValidUuid(userId)) {
+      console.warn('incrementTimelineLikes: skipping — userId is not UUID format', { userId });
+      return;
+    }
 
     const query = `UPDATE user_timeline 
       SET likes_count = likes_count + 1 
@@ -546,6 +551,10 @@ class CassandraClient {
     content?: string
   ): Promise<void> {
     if (!this.client) throw new Error('Cassandra not connected');
+    if (!isValidUuid(userId) || !isValidUuid(beerId)) {
+      console.warn('logActivity: skipping — IDs are not UUID format', { userId, beerId });
+      return;
+    }
 
     const createdAt = new Date();
     const activityId = Uuid.random();
@@ -600,6 +609,10 @@ class CassandraClient {
     content: string
   ): Promise<void> {
     if (!this.client) throw new Error('Cassandra not connected');
+    if (!isValidUuid(beerId) || !isValidUuid(userId)) {
+      console.warn('indexBeerReview: skipping — IDs are not UUID format', { beerId, userId });
+      return;
+    }
 
     const createdAt = new Date();
     const reviewId = Uuid.random();
@@ -647,6 +660,10 @@ class CassandraClient {
 
   async followUser(userId: string, followerId: string, followerName: string): Promise<void> {
     if (!this.client) throw new Error('Cassandra not connected');
+    if (!isValidUuid(userId) || !isValidUuid(followerId)) {
+      console.warn('followUser: skipping — IDs are not UUID format', { userId, followerId });
+      return;
+    }
 
     // Cassandra schema uses UUID for user IDs; skip sync when app IDs are not UUID.
     if (!this.isValidUuid(userId) || !this.isValidUuid(followerId)) {

@@ -31,8 +31,15 @@ export function FriendsList({ currentUserId, onBack, onUserClick, onSendMessage 
   const [isSearching, setIsSearching] = useState(false);
   const [pendingRequests, setPendingRequests] = useState<any[]>([]);
 
+  const [requestErrors, setRequestErrors] = useState<Record<string, string>>({});
+
   useEffect(() => {
     fetchFriends();
+
+    // Refresh when a notification arrives (e.g. new friend request via SSE)
+    const onRefresh = () => fetchFriends();
+    window.addEventListener('beersocial:refreshNotifications', onRefresh);
+    return () => window.removeEventListener('beersocial:refreshNotifications', onRefresh);
   }, []);
 
   const fetchFriends = async () => {
@@ -66,24 +73,27 @@ export function FriendsList({ currentUserId, onBack, onUserClick, onSendMessage 
     }
   };
 
-  const handleSendRequest = async (userId: string) => {
+  const handleSendRequest = async (userId: string, userName: string) => {
+    setRequestErrors(prev => ({ ...prev, [userId]: '' }));
     try {
       const res = await fetch('/api/friends', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ addresseeId: userId })
+        body: JSON.stringify({ addresseeId: userId, addresseeName: userName })
       });
 
       if (!res.ok) {
-        const body = await res.json().catch(() => undefined);
-        console.error('Error sending friend request', { status: res.status, body });
+        const body = await res.json().catch(() => ({} as Record<string, string>));
+        const msg = body?.error || `Erro ${res.status}`;
+        setRequestErrors(prev => ({ ...prev, [userId]: msg }));
         return;
       }
 
-      setSearchResults(prev => prev.map(u => ({ ...u, requestSent: true } as any)));
+      setSearchResults(prev => prev.map(u => u.id === userId ? { ...u, requestSent: true } as any : u));
     } catch (error) {
       console.error('Error sending friend request:', error);
+      setRequestErrors(prev => ({ ...prev, [userId]: 'Erro de rede' }));
     }
   };
 
@@ -180,11 +190,14 @@ export function FriendsList({ currentUserId, onBack, onUserClick, onSendMessage 
                   <Button 
                     size="sm" 
                     variant="outline"
-                    onClick={() => handleSendRequest(user.id)}
+                    onClick={() => handleSendRequest(user.id, user.name)}
                     disabled={(user as any).requestSent}
                   >
                     {(user as any).requestSent ? 'Enviado' : 'Adicionar'}
                   </Button>
+                  {requestErrors[user.id] && (
+                    <p className="text-xs text-red-500 mt-1">{requestErrors[user.id]}</p>
+                  )}
                 </div>
               ))}
             </div>
