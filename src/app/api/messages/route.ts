@@ -129,6 +129,25 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (typeof receiverId !== 'string' || typeof content !== 'string') {
+      console.log('POST /api/messages - Invalid field types', {
+        receiverIdType: typeof receiverId,
+        contentType: typeof content,
+      });
+      return NextResponse.json(
+        { error: 'Parâmetros inválidos' },
+        { status: 400 }
+      );
+    }
+
+    const normalizedContent = content.trim();
+    if (!normalizedContent) {
+      return NextResponse.json(
+        { error: 'Conteúdo da mensagem é obrigatório' },
+        { status: 400 }
+      );
+    }
+
     const cassandra = await getCassandra();
 
     // Enviar mensagem (Cassandra)
