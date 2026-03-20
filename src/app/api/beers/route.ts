@@ -10,6 +10,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getMongoDB } from '@/lib/mongodb-client';
 import { getCurrentUser } from '@/lib/auth';
+import { getRedis } from '@/lib/redis-client';
 import { publishBeerCreatedEvent } from '@/lib/realtime/beer-events';
 
 function summarizeBeerField(value: unknown) {
