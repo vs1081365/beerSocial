@@ -162,7 +162,7 @@ export async function POST(request: NextRequest) {
     // Criar amizade no MongoDB
     // If a previous REJECTED friendship exists, replace it
     if (existing?.status === 'REJECTED') {
-      await mongo.updateFriendshipStatus(existing._id as string, 'PENDING');
+      await mongo.updateFriendshipStatus(existing._id as string, 'REJECTED'); // Mark old as rejected (or you could delete it)
       const updatedFriendship = await mongo.getFriendshipById(existing._id as string);
 
       await mongo.createNotification({

@@ -110,10 +110,12 @@ export function Header({ currentUser, onAuth, onLogout, onSearch, onNavigate }: 
     // Also refresh when other parts of the app dispatch an update event
     const onRefresh = () => fetchData();
     window.addEventListener('beersocial:refreshNotifications', onRefresh);
+    window.addEventListener('beersocial:refreshMessages', onRefresh);
 
     return () => {
       source.close();
       window.removeEventListener('beersocial:refreshNotifications', onRefresh);
+      window.removeEventListener('beersocial:refreshMessages', onRefresh);
     };
   }, [currentUser]);
 

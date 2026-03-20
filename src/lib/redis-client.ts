@@ -223,6 +223,11 @@ class RedisClient {
     return parseInt(value || '0');
   }
 
+  async clearCounter(key: string): Promise<void> {
+    if (!this.client) return;
+    await this.client.del(`${this.PREFIX.COUNTER}${key}`);
+  }
+
   // Contador de likes
   async likeBeer(beerId: string): Promise<number> {
     return this.incrementCounter(`beer:${beerId}:likes`);
@@ -383,6 +388,31 @@ class RedisClient {
       remaining,
       resetIn,
     };
+  }
+
+  async clearRateLimit(key: string): Promise<void> {
+    if (!this.client) return;
+    await this.client.del(`${this.PREFIX.RATE_LIMIT}${key}`);
+  }
+
+  // ==========================================
+  // MENSAGENS NÃO LIDAS - Hash por utilizador
+  // ==========================================
+
+  async incrementUnreadMessages(userId: string, senderId: string): Promise<void> {
+    if (!this.client) return;
+    await this.client.hIncrBy(`unread:${userId}`, senderId, 1);
+  }
+
+  async clearUnreadMessagesFrom(userId: string, senderId: string): Promise<void> {
+    if (!this.client) return;
+    await this.client.hDel(`unread:${userId}`, senderId);
+  }
+
+  async getTotalUnreadMessages(userId: string): Promise<number> {
+    if (!this.client) return 0;
+    // Conta o número de chats com mensagens não lidas (não o total de mensagens)
+    return await this.client.hLen(`unread:${userId}`);
   }
 
   // ==========================================
