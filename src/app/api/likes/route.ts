@@ -121,7 +121,7 @@ export async function POST(request: NextRequest) {
           type: 'NEW_LIKE',
           title: 'Novo Gosto',
           message: `${user.name} gostou da sua review`,
-          data: JSON.stringify({ reviewId }),
+          data: JSON.stringify({ reviewId, beerId: review.beerId }),
         });
       }
     }

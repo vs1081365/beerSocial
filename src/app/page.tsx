@@ -58,7 +58,6 @@ interface Review {
 }
 
 type ViewType = 'feed' | 'beer' | 'profile' | 'chat' | 'add-beer' | 'friends' | 'my-reviews' | 'search';
-const FEED_AUTO_REFRESH_MS = 15000;
 
 export default function Home() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);

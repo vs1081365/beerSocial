@@ -166,7 +166,7 @@ export async function POST(request: NextRequest) {
         type: 'NEW_COMMENT',
         title: 'Novo Comentário',
         message: `${user.name} comentou na sua review`,
-        data: JSON.stringify({ reviewId }),
+        data: JSON.stringify({ reviewId, beerId: review.beerId }),
       });
 
       // Invalidar cache de notificações + publicar via Redis Pub/Sub
