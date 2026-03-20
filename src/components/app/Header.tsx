@@ -84,8 +84,7 @@ export function Header({ currentUser, onAuth, onLogout, onSearch, onNavigate }: 
     // Real-time updates via Server-Sent Events (Redis Pub/Sub)
     const source = new EventSource('/api/realtime');
     source.addEventListener('notification', (e: MessageEvent) => {
-      fetchData();
-      // Notify page components listening for updates
+      // Dispatch event — the listener below will call fetchData() once
       window.dispatchEvent(new Event('beersocial:refreshNotifications'));
       // If it's a new review, also refresh the feed
       try {
@@ -95,7 +94,9 @@ export function Header({ currentUser, onAuth, onLogout, onSearch, onNavigate }: 
         }
       } catch { /* non-JSON ping, ignore */ }
     });
-    source.addEventListener('message', () => fetchData());
+    source.addEventListener('message', () => {
+      window.dispatchEvent(new Event('beersocial:refreshNotifications'));
+    });
     // Global events (new beers, leaderboard updates)
     source.addEventListener('global', (e: MessageEvent) => {
       try {
@@ -205,6 +206,37 @@ export function Header({ currentUser, onAuth, onLogout, onSearch, onNavigate }: 
       case 'NEW_LIKE': return <span>❤️</span>;
       case 'NEW_MESSAGE': return <MessageCircle className="h-4 w-4" />;
       default: return <Bell className="h-4 w-4" />;
+    }
+  };
+
+  const handleNotificationClick = (notif: Notification) => {
+    setShowNotifications(false);
+    try {
+      const data = notif.data ? JSON.parse(notif.data) : {};
+      switch (notif.type) {
+        case 'BEER_REVIEW':
+        case 'NEW_REVIEW':
+          if (data.beerId) onNavigate('beer', data.beerId);
+          break;
+        case 'NEW_COMMENT':
+        case 'NEW_LIKE':
+          if (data.beerId) onNavigate('beer', data.beerId);
+          else onNavigate('feed');
+          break;
+        case 'FRIEND_REQUEST':
+        case 'FRIEND_ACCEPTED':
+          onNavigate('friends');
+          break;
+        case 'NEW_MESSAGE':
+          if (data.senderId) {
+            onNavigate('chat', { id: data.senderId, name: data.senderName || 'User' });
+          }
+          break;
+        default:
+          onNavigate('feed');
+      }
+    } catch {
+      onNavigate('feed');
     }
   };
 
@@ -384,7 +416,11 @@ export function Header({ currentUser, onAuth, onLogout, onSearch, onNavigate }: 
                         {(notifications || []).map((notif, index) => (
                           <div
                             key={notif.id || `notification-${index}`}
-                            className={`flex items-start gap-2 p-2 rounded-lg hover:bg-muted ${!notif.isRead ? 'bg-amber-50' : ''}`}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => handleNotificationClick(notif)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') handleNotificationClick(notif); }}
+                            className={`flex items-start gap-2 p-2 rounded-lg hover:bg-muted cursor-pointer ${!notif.isRead ? 'bg-amber-50' : ''}`}
                           >
                             <div className="mt-1">{getNotificationIcon(notif.type)}</div>
                             <div className="flex-1">

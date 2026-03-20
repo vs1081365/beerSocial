@@ -202,7 +202,7 @@ export async function POST(request: NextRequest) {
       type: 'NEW_MESSAGE',
       title: 'Nova Mensagem',
       message: `${user.name} enviou-lhe uma mensagem`,
-      data: JSON.stringify({ senderId: user.id }),
+      data: JSON.stringify({ senderId: user.id, senderName: user.name }),
     });
 
     // Notificar via Redis Pub/Sub (tempo real)
