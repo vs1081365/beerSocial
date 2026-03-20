@@ -116,7 +116,7 @@ class MongoDBClient {
   private conversations: Collection<ConversationDocument> | null = null;
 
   async connect(): Promise<void> {
-    const url = process.env.MONGODB_URL || 'mongodb://beersocial:beersocial123@localhost:27017/beersocial';
+    const url = process.env.MONGODB_URL || 'mongodb://beersocial:beersocial123@localhost:27017/beersocial?authSource=admin';
     const dbName = process.env.MONGODB_DB || 'beersocial';
 
     try {

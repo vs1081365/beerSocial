@@ -40,10 +40,20 @@ export function ChatWindow({ otherUser, currentUserId, currentUserName, onBack }
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    // Initial load
     fetchMessages();
-    // Poll for new messages every 5 seconds
-    const interval = setInterval(fetchMessages, 5000);
-    return () => clearInterval(interval);
+
+    // Real-time updates via Server-Sent Events (Redis Pub/Sub)
+    const source = new EventSource('/api/realtime');
+    source.addEventListener('message', (e: MessageEvent) => {
+      const data = JSON.parse(e.data) as { senderId: string };
+      // Only refetch when the event belongs to this conversation
+      if (data.senderId === otherUser.id) {
+        fetchMessages();
+      }
+    });
+
+    return () => source.close();
   }, [otherUser.id]);
 
   useEffect(() => {

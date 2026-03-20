@@ -28,6 +28,14 @@ export async function GET(request: NextRequest) {
     const limit = parseInt(searchParams.get('limit') || '20');
     const offset = parseInt(searchParams.get('offset') || '0');
 
+    // Redis cache - short TTL (30s) to keep feed fresh
+    const redis = await getRedis();
+    const cacheKey = `reviews:${beerId || userId || 'all'}:${limit}:${offset}`;
+    const cached = await redis.getCache(cacheKey);
+    if (cached) {
+      return NextResponse.json(JSON.parse(cached));
+    }
+
     const mongo = await getMongoDB();
     
     let reviews;
@@ -86,14 +94,17 @@ export async function GET(request: NextRequest) {
       };
     });
 
-    return NextResponse.json({
+    const response = {
       technology: {
         storage: 'MongoDB (reviews collection)',
+        cache: 'Redis (TTL 30s)',
         embeddedDocuments: ['comments[]', 'likes[]'],
         indexes: ['beerId_1_createdAt_-1', 'userId_1_createdAt_-1'],
       },
       reviews: transformedReviews,
-    });
+    };
+    await redis.setCache(cacheKey, JSON.stringify(response), 30);
+    return NextResponse.json(response);
   } catch (error) {
     console.error('Get reviews error:', error);
     return NextResponse.json(
@@ -124,6 +135,20 @@ export async function POST(request: NextRequest) {
 
     const mongo = await getMongoDB();
     
+    // Cassandra: rate limit (5 reviews per hour per user)
+    try {
+      const cassandra = await getCassandra();
+      const allowed = await cassandra.checkRateLimit(user.id, 'review', 5, 3600);
+      if (!allowed) {
+        return NextResponse.json(
+          { error: 'Limite de reviews atingido. Aguarda antes de criar outra review.' },
+          { status: 429 }
+        );
+      }
+    } catch (e) {
+      console.warn('Cassandra rate limit check failed (allowing request):', e);
+    }
+
     // Verificar se já avaliou
     const alreadyReviewed = await mongo.checkUserReviewed(user.id, beerId);
     if (alreadyReviewed) {
@@ -213,20 +238,59 @@ export async function POST(request: NextRequest) {
           review_id: review._id,
           created_at: new Date(),
         };
-
-        console.log('Adding to Cassandra timeline', { followerIds, timelineItem });
-
         await cassandra.addToTimeline(followerIds, timelineItem);
+
+        // Notify each follower via Redis Pub/Sub → SSE
+        const notifyRedis = await getRedis();
+        for (const fid of followerIds) {
+          await notifyRedis.publish(`user:${fid}:notifications`, JSON.stringify({
+            type: 'NEW_REVIEW',
+            reviewId: review._id,
+            reviewerName: user.name,
+            beerName: reviewBeerName,
+            rating: parsedRating,
+          })).catch(() => {});
+        }
       }
     } catch (e) {
       console.warn('Could not add to Cassandra timeline:', e);
+    }
+
+    // Update Redis leaderboards
+    try {
+      const redis = await getRedis();
+      const [beerStats, userReviews] = await Promise.all([
+        mongo.getBeerReviewStats(beerId),
+        mongo.getReviewsByUser(user.id, 1000, 0),
+      ]);
+      await Promise.all([
+        redis.updateBeerRating(beerId, beerStats.avgRating),
+        redis.updateUserReviewCount(user.id, userReviews.length),
+      ]);
+    } catch (e) {
+      console.warn('Redis leaderboard update failed:', e);
+    }
+
+    // Cassandra: log activity + index review for beer
+    try {
+      const cassandra = await getCassandra();
+      await Promise.all([
+        cassandra.logActivity(user.id, 'REVIEW', beerId, reviewBeerName, parsedRating, content || ''),
+        cassandra.indexBeerReview(beerId, user.id, user.name, parsedRating, content || ''),
+      ]);
+    } catch (e) {
+      console.warn('Cassandra activity/index failed:', e);
     }
 
     return NextResponse.json({
       technology: {
         storage: 'MongoDB (embedded comments & likes)',
         cacheInvalidation: 'Redis (beer:*, reviews:*)',
+        leaderboard: 'Redis sorted sets (beer_ratings, user_review_counts)',
         timeline: 'Cassandra (partition by user_id)',
+        activityLog: 'Cassandra (user_activity table)',
+        beerIndex: 'Cassandra (beer_reviews_index table)',
+        pubsub: 'Redis Pub/Sub → SSE (followers notified)',
       },
       review,
     }, { status: 201 });

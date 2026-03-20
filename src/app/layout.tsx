@@ -19,7 +19,7 @@ export const metadata: Metadata = {
   keywords: ["cerveja", "social", "React"],
   authors: [{ name: "BeerFriends Team" }],
   icons: {
-    icon: "C:\\Users\\baski\\Downloads\\cheers.png",
+    icon: "/favicon.ico",
   },
   openGraph: {
     title: "BeerFriends - Encontre amigos cervejeiros e partilhe as suas avaliações de cerveja",

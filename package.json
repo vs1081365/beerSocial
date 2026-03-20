@@ -7,10 +7,7 @@
     "build": "next build && xcopy .next\\static .next\\standalone\\.next\\static /E /I /H /Y && xcopy public .next\\standalone\\public /E /I /H /Y",
     "start": "NODE_ENV=production bun .next/standalone/server.js 2>&1 | tee server.log",
     "lint": "eslint .",
-    "db:push": "prisma db push",
-    "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev",
-    "db:reset": "prisma migrate reset"
+    "db:seed": "bun run scripts/seed-users.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

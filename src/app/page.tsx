@@ -83,6 +83,15 @@ export default function Home() {
     }
   }, [view]);
 
+  // Real-time feed refresh via SSE (new review posted by a friend)
+  useEffect(() => {
+    const onRefreshFeed = () => {
+      if (view === 'feed') loadData();
+    };
+    window.addEventListener('beersocial:refreshFeed', onRefreshFeed);
+    return () => window.removeEventListener('beersocial:refreshFeed', onRefreshFeed);
+  }, [view]);
+
   const checkAuth = async () => {
     try {
       const res = await fetch('/api/auth/me');
@@ -219,7 +228,10 @@ export default function Home() {
         return (
           <AddBeerForm
             onBack={() => setView('feed')}
-            onSuccess={(beerId) => handleNavigate('beer', beerId)}
+            onSuccess={(beerId) => {
+                loadData(); // Refresh beer list (bypasses stale cache)
+                handleNavigate('beer', beerId);
+              }}
           />
         );
       

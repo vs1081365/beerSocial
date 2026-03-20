@@ -92,6 +92,8 @@ export function BeerDetail({
 
         // Notify header to refresh notifications (and counts)
         window.dispatchEvent(new Event('beersocial:refreshNotifications'));
+        // Refresh the feed so the new review appears
+        window.dispatchEvent(new Event('beersocial:refreshFeed'));
       }
     } catch (error) {
       console.error('Error submitting review:', error);

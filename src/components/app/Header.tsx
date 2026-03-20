@@ -78,17 +78,40 @@ export function Header({ currentUser, onAuth, onLogout, onSearch, onNavigate }: 
   useEffect(() => {
     if (!currentUser) return;
 
+    // Initial load
     fetchData();
 
-    // Poll for new notifications every 30 seconds
-    const interval = setInterval(fetchData, 30000);
+    // Real-time updates via Server-Sent Events (Redis Pub/Sub)
+    const source = new EventSource('/api/realtime');
+    source.addEventListener('notification', (e: MessageEvent) => {
+      fetchData();
+      // Notify page components listening for updates
+      window.dispatchEvent(new Event('beersocial:refreshNotifications'));
+      // If it's a new review, also refresh the feed
+      try {
+        const payload = JSON.parse(e.data || '{}');
+        if (payload.type === 'NEW_REVIEW') {
+          window.dispatchEvent(new Event('beersocial:refreshFeed'));
+        }
+      } catch { /* non-JSON ping, ignore */ }
+    });
+    source.addEventListener('message', () => fetchData());
+    // Global events (new beers, leaderboard updates)
+    source.addEventListener('global', (e: MessageEvent) => {
+      try {
+        const payload = JSON.parse(e.data || '{}');
+        if (payload.type === 'NEW_BEER') {
+          window.dispatchEvent(new Event('beersocial:refreshFeed'));
+        }
+      } catch { /* ignore */ }
+    });
 
     // Also refresh when other parts of the app dispatch an update event
     const onRefresh = () => fetchData();
     window.addEventListener('beersocial:refreshNotifications', onRefresh);
 
     return () => {
-      clearInterval(interval);
+      source.close();
       window.removeEventListener('beersocial:refreshNotifications', onRefresh);
     };
   }, [currentUser]);

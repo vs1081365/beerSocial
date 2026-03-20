@@ -444,6 +444,25 @@ class RedisClient {
   }
 
   // ==========================================
+  // COMMENT LIKES - Sets
+  // ==========================================
+
+  async likeComment(commentId: string, userId: string): Promise<void> {
+    if (!this.client) return;
+    await this.client.sAdd(`comment_likes:${commentId}`, userId);
+  }
+
+  async unlikeComment(commentId: string, userId: string): Promise<void> {
+    if (!this.client) return;
+    await this.client.sRem(`comment_likes:${commentId}`, userId);
+  }
+
+  async isCommentLikedByUser(commentId: string, userId: string): Promise<boolean> {
+    if (!this.client) return false;
+    return this.client.sIsMember(`comment_likes:${commentId}`, userId);
+  }
+
+  // ==========================================
   // PUB/SUB - Notificações em tempo real
   // ==========================================
 

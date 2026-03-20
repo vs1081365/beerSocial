@@ -114,21 +114,15 @@ export async function GET(request: NextRequest) {
 // POST - Enviar mensagem
 export async function POST(request: NextRequest) {
   try {
-    console.log('POST /api/messages - Starting message send');
-    
     const user = await getCurrentUser();
     if (!user) {
-      console.log('POST /api/messages - User not authenticated');
       return NextResponse.json({ error: 'Não autenticado' }, { status: 401 });
     }
-    console.log('POST /api/messages - User authenticated:', user.id);
 
     const body = await request.json();
     const { receiverId, receiverName, content } = body;
-    console.log('POST /api/messages - Request body:', { receiverId, receiverName, content: content?.substring(0, 50) });
 
     if (!receiverId || !content) {
-      console.log('POST /api/messages - Missing required fields');
       return NextResponse.json(
         { error: 'Destinatário e conteúdo são obrigatórios' },
         { status: 400 }
@@ -136,53 +130,33 @@ export async function POST(request: NextRequest) {
     }
 
     const cassandra = await getCassandra();
-    console.log('POST /api/messages - Cassandra connected');
-    
+
     // Enviar mensagem (Cassandra)
     const message = await cassandra.sendMessage(user.id, receiverId, user.name, content);
-    console.log('POST /api/messages - Message sent to Cassandra:', message);
-    
-    console.log('Message properties:', {
-      message_id: message.message_id,
-      sender_id: message.sender_id,
-      sender_name: message.sender_name,
-      content: message.content,
-      created_at: message.created_at
-    });
 
     // Criar ou atualizar conversa (MongoDB)
     const mongo = await getMongoDB();
-    console.log('POST /api/messages - MongoDB connected');
-    
+
     // Check if conversation already exists
     const existingConversations = await mongo.getUserConversations(user.id);
-    console.log('POST /api/messages - Existing conversations:', existingConversations.length);
-    
-    const existingConv = existingConversations.find(conv => 
+    const existingConv = existingConversations.find(conv =>
       conv.participants.includes(user.id) && conv.participants.includes(receiverId)
     );
 
     if (existingConv) {
-      console.log('POST /api/messages - Updating existing conversation:', existingConv._id);
-      // Update existing conversation with last message
-      const updateResult = await mongo.updateConversationLastMessage(existingConv._id, {
+      await mongo.updateConversationLastMessage(existingConv._id, {
         content,
         senderId: user.id,
         senderName: user.name,
       });
-      console.log('POST /api/messages - Conversation update result:', updateResult);
     } else {
-      console.log('POST /api/messages - Creating new conversation');
-      // Create new conversation
-      const newConv = await mongo.createConversation(
+      await mongo.createConversation(
         [user.id, receiverId],
         [user.name, receiverName || 'Unknown']
       );
-      console.log('POST /api/messages - New conversation created:', newConv._id);
     }
 
     // Criar notificação (MongoDB)
-    console.log('POST /api/messages - Creating notification');
     await mongo.createNotification({
       userId: receiverId,
       type: 'NEW_MESSAGE',
@@ -190,15 +164,12 @@ export async function POST(request: NextRequest) {
       message: `${user.name} enviou-lhe uma mensagem`,
       data: JSON.stringify({ senderId: user.id }),
     });
-    console.log('POST /api/messages - Notification created');
 
     // Notificar via Redis Pub/Sub (tempo real)
-    console.log('POST /api/messages - Sending real-time notification');
     const redis = await getRedis();
     await redis.notifyNewMessage(receiverId, user.id, content);
-    console.log('POST /api/messages - Real-time notification sent');
 
-    const response = {
+    return NextResponse.json({
       technology: {
         storage: 'Cassandra (messages table)',
         partitionKey: 'conversation_id = hash(user1 + user2)',
@@ -213,18 +184,14 @@ export async function POST(request: NextRequest) {
         sender: {
           id: message.sender_id,
           name: message.sender_name,
-          username: message.sender_name.toLowerCase().replace(/\s+/g, ''), // Generate username
-          avatar: null, // TODO: Add avatar support
+          username: message.sender_name.toLowerCase().replace(/\s+/g, ''),
+          avatar: null,
         },
       },
       conversationId: cassandra.generateConversationId(user.id, receiverId),
-    };
-    
-    console.log('POST /api/messages - Success response:', response);
-    return NextResponse.json(response);
+    });
   } catch (error: any) {
     console.error('Send message error:', error);
-    console.error('Send message stack:', error?.stack);
     return NextResponse.json(
       { error: 'Erro ao enviar mensagem', details: error?.message || String(error) },
       { status: 500 }
