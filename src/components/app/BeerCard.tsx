@@ -25,12 +25,18 @@ export function BeerCard({ beer, onClick }: BeerCardProps) {
       className="overflow-hidden cursor-pointer hover:shadow-lg transition-shadow"
       onClick={onClick}
     >
-      <div className="aspect-square relative bg-gradient-to-br from-amber-100 to-amber-200">
+      <div className="aspect-square relative bg-white overflow-hidden">
         {beer.image ? (
           <img 
             src={beer.image} 
             alt={beer.name}
-            className="w-full h-full object-cover"
+            className="w-full h-full object-contain object-center"
+            loading="lazy"
+            style={{
+              maxWidth: '100%',
+              maxHeight: '100%',
+              display: 'block'
+            }}
           />
         ) : (
           <div className="w-full h-full flex items-center justify-center">

@@ -156,6 +156,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Garantir que armazenamos o nome do addressee para uso futuro
+    const resolvedAddresseeName = addresseeName || (await mongo.getUserById(addresseeId))?.name || '';
+
     // Criar amizade no MongoDB
     // If a previous REJECTED friendship exists, replace it
     if (existing?.status === 'REJECTED') {
@@ -188,7 +191,7 @@ export async function POST(request: NextRequest) {
       requesterId: user.id,
       requesterName: user.name,
       addresseeId,
-      addresseeName,
+      addresseeName: resolvedAddresseeName,
     });
 
     // Criar notificação

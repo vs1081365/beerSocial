@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useToast } from '@/hooks/use-toast';
 import { Header } from '@/components/app/Header';
 import { BeerCard } from '@/components/app/BeerCard';
 import { ReviewCard } from '@/components/app/ReviewCard';

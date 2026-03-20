@@ -101,14 +101,20 @@ export function ReviewCard({
         <div className="flex items-start gap-3">
           {/* Beer Image */}
           <div 
-            className="w-16 h-16 rounded-lg overflow-hidden bg-amber-100 flex-shrink-0 cursor-pointer"
+            className="w-16 h-16 rounded-lg overflow-hidden bg-white flex-shrink-0 cursor-pointer"
             onClick={() => onBeerClick(review.beer!.id)}
           >
             {review.beer.image ? (
               <img 
                 src={review.beer.image} 
                 alt={review.beer.name}
-                className="w-full h-full object-cover"
+                className="w-full h-full object-contain object-center"
+                loading="lazy"
+                style={{
+                  maxWidth: '100%',
+                  maxHeight: '100%',
+                  display: 'block'
+                }}
               />
             ) : (
               <div className="w-full h-full flex items-center justify-center">
