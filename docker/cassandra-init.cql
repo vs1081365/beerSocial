@@ -46,13 +46,16 @@ CREATE TABLE IF NOT EXISTS messages (
     conversation_id TEXT,  -- hash de user1_id + user2_id
     created_at TIMESTAMP,
     message_id UUID,
-    sender_id UUID,
-    receiver_id UUID,
+    sender_id TEXT,
+    receiver_id TEXT,
     sender_name TEXT,
     content TEXT,
     is_read BOOLEAN,
     PRIMARY KEY (conversation_id, created_at)
 ) WITH CLUSTERING ORDER BY (created_at ASC);
+
+CREATE INDEX IF NOT EXISTS idx_messages_sender_id ON messages (sender_id);
+CREATE INDEX IF NOT EXISTS idx_messages_receiver_id ON messages (receiver_id);
 
 -- ============================================
 -- TABLE: notifications (Notificações)
@@ -80,11 +83,11 @@ CREATE TABLE IF NOT EXISTS notifications (
 -- Clustering Key: created_at DESC
 -- ============================================
 CREATE TABLE IF NOT EXISTS user_activity (
-    user_id UUID,
+    user_id TEXT,
     created_at TIMESTAMP,
     activity_id UUID,
     activity_type TEXT,
-    beer_id UUID,
+    beer_id TEXT,
     beer_name TEXT,
     rating DECIMAL,
     content TEXT,
@@ -98,10 +101,10 @@ CREATE TABLE IF NOT EXISTS user_activity (
 -- Clustering Key: created_at DESC
 -- ============================================
 CREATE TABLE IF NOT EXISTS beer_reviews_index (
-    beer_id UUID,
+    beer_id TEXT,
     created_at TIMESTAMP,
     review_id UUID,
-    user_id UUID,
+    user_id TEXT,
     user_name TEXT,
     rating DECIMAL,
     content TEXT,
@@ -115,8 +118,8 @@ CREATE TABLE IF NOT EXISTS beer_reviews_index (
 -- Clustering Key: follower_id
 -- ============================================
 CREATE TABLE IF NOT EXISTS followers (
-    user_id UUID,
-    follower_id UUID,
+    user_id TEXT,
+    follower_id TEXT,
     follower_name TEXT,
     followed_at TIMESTAMP,
     PRIMARY KEY (user_id, follower_id)
@@ -124,8 +127,8 @@ CREATE TABLE IF NOT EXISTS followers (
 
 -- Tabela inversa para following
 CREATE TABLE IF NOT EXISTS following (
-    user_id UUID,
-    following_id UUID,
+    user_id TEXT,
+    following_id TEXT,
     following_name TEXT,
     followed_at TIMESTAMP,
     PRIMARY KEY (user_id, following_id)

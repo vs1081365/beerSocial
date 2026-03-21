@@ -139,8 +139,8 @@ class CassandraClient {
         beer_style TEXT,
         rating DECIMAL,
         content TEXT,
-        likes_count COUNTER,
-        comments_count COUNTER,
+        likes_count INT,
+        comments_count INT,
         PRIMARY KEY (user_id, created_at)
       ) WITH CLUSTERING ORDER BY (created_at DESC)
         AND default_time_to_live = 604800`,
@@ -341,15 +341,15 @@ class CassandraClient {
         review.beer_style,
         review.rating,
         review.content,
-        types.Long.fromNumber(0),
-        types.Long.fromNumber(0),
+        0,
+        0,
       ]
     }));
 
     await this.client.batch(queries, { prepare: true });
   }
 
-  // Update counter para likes (Cassandra counter update)
+  // Increment likes_count on an INT column (read + set)
   async incrementTimelineLikes(reviewId: string, userId: string, createdAt: Date): Promise<void> {
     if (!this.client) throw new Error('Cassandra not connected');
     if (!isValidUuid(userId)) {
@@ -357,11 +357,16 @@ class CassandraClient {
       return;
     }
 
-    const query = `UPDATE user_timeline 
-      SET likes_count = likes_count + 1 
+    const selectQuery = `SELECT likes_count FROM user_timeline
       WHERE user_id = ? AND created_at = ?`;
-    
-    await this.client.execute(query, [Uuid.fromString(userId), createdAt], { prepare: true });
+    const current = await this.client.execute(selectQuery, [Uuid.fromString(userId), createdAt], { prepare: true });
+    const currentLikes = Number(current.first()?.likes_count ?? 0);
+
+    const query = `UPDATE user_timeline
+      SET likes_count = ?
+      WHERE user_id = ? AND created_at = ?`;
+
+    await this.client.execute(query, [currentLikes + 1, Uuid.fromString(userId), createdAt], { prepare: true });
   }
 
   // ==========================================

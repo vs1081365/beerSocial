@@ -102,6 +102,17 @@ export interface NotificationDocument extends Document {
   createdAt: Date;
 }
 
+const NOTIFICATION_SAFE_PROJECTION = {
+  _id: 1,
+  userId: 1,
+  type: 1,
+  title: 1,
+  message: 1,
+  data: 1,
+  isRead: 1,
+  createdAt: 1,
+} as const;
+
 export interface ConversationDocument extends Document {
   _id: string;
   participants: string[];
@@ -787,39 +798,64 @@ class MongoDBClient {
         .toArray();
     } catch (error) {
       console.warn('Falling back to safe notifications projection after read error:', { userId, error });
+      try {
+        const notificationRefs = await this.notifications
+          .find({ userId }, { projection: { _id: 1, createdAt: 1 } })
+          .sort({ createdAt: -1 })
+          .skip(offset)
+          .limit(limit)
+          .toArray();
 
-      const notificationRefs = await this.notifications
-        .find({ userId }, { projection: { _id: 1, createdAt: 1 } })
-        .sort({ createdAt: -1 })
-        .skip(offset)
-        .limit(limit)
-        .toArray();
-
-      const notifications = await Promise.all(
-        notificationRefs.map(async (notificationRef) => {
-          try {
-            return await this.notifications!.findOne({ _id: notificationRef._id });
-          } catch (notificationError) {
-            console.warn('Deleting corrupt notification after decode failure:', {
-              notificationId: notificationRef._id,
-              error: notificationError,
-            });
-
+        const notifications = await Promise.all(
+          notificationRefs.map(async (notificationRef) => {
             try {
-              await this.notifications!.deleteOne({ _id: notificationRef._id });
-            } catch (deleteError) {
-              console.warn('Could not delete corrupt notification:', {
+              return await this.notifications!.findOne({ _id: notificationRef._id }, { projection: NOTIFICATION_SAFE_PROJECTION });
+            } catch (notificationError) {
+              console.warn('Repairing corrupt notification after decode failure:', {
                 notificationId: notificationRef._id,
-                error: deleteError,
+                error: notificationError,
               });
+
+              try {
+                await this.notifications!.updateOne(
+                  { _id: notificationRef._id },
+                  {
+                    $set: {
+                      type: 'SYSTEM',
+                      title: 'Notificacao recuperada',
+                      message: 'Esta notificacao tinha dados invalidos e foi recuperada automaticamente.',
+                      data: '{}',
+                    },
+                  }
+                );
+
+                return await this.notifications!.findOne({ _id: notificationRef._id }, { projection: NOTIFICATION_SAFE_PROJECTION });
+              } catch (repairError) {
+                console.warn('Deleting irrecoverable notification after repair failure:', {
+                  notificationId: notificationRef._id,
+                  error: repairError,
+                });
+
+                try {
+                  await this.notifications!.deleteOne({ _id: notificationRef._id });
+                } catch (deleteError) {
+                  console.warn('Could not delete corrupt notification:', {
+                    notificationId: notificationRef._id,
+                    error: deleteError,
+                  });
+                }
+
+                return null;
+              }
             }
+          })
+        );
 
-            return null;
-          }
-        })
-      );
-
-      return notifications.filter((notification): notification is NotificationDocument => !!notification);
+        return notifications.filter((notification): notification is NotificationDocument => !!notification);
+      } catch (fallbackError) {
+        console.error('Could not recover notifications after read error:', { userId, error: fallbackError });
+        return [];
+      }
     }
   }
 
