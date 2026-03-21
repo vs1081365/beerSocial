@@ -1,13 +1,36 @@
 // MongoDB Init Script
-// Cria a base de dados e collections com indexes otimizados
+// Cria a base de dados, collections e indexes da aplicação no primeiro arranque
 
 db = db.getSiblingDB('beersocial');
 
+const existingCollections = new Set(db.getCollectionNames());
+
+function createCollectionIfMissing(name, options = undefined) {
+  if (existingCollections.has(name)) {
+    print(`Collection '${name}' already exists`);
+    return;
+  }
+
+  if (options) {
+    db.createCollection(name, options);
+  } else {
+    db.createCollection(name);
+  }
+
+  print(`Collection '${name}' created`);
+}
+
 // ============================================
-// COLLECTION: reviews
-// Documentos com reviews e comentários embedded
+// COLLECTIONS
 // ============================================
-db.createCollection('reviews', {
+
+createCollectionIfMissing('users');
+createCollectionIfMissing('beers');
+createCollectionIfMissing('friendships');
+createCollectionIfMissing('notifications');
+createCollectionIfMissing('conversations');
+
+createCollectionIfMissing('reviews', {
   validator: {
     $jsonSchema: {
       bsonType: 'object',
@@ -26,93 +49,52 @@ db.createCollection('reviews', {
             properties: {
               userId: { bsonType: 'string' },
               content: { bsonType: 'string' },
-              createdAt: { bsonType: 'date' }
-            }
-          }
+              createdAt: { bsonType: 'date' },
+            },
+          },
         },
         likes: {
           bsonType: 'array',
-          items: { bsonType: 'string' }
-        }
-      }
-    }
-  }
+          items: { bsonType: 'string' },
+        },
+      },
+    },
+  },
 });
 
-// Indexes para queries comuns
+// ============================================
+// INDEXES
+// ============================================
+
+// Users
+db.users.createIndex({ email: 1 }, { unique: true });
+db.users.createIndex({ username: 1 }, { unique: true });
+
+// Beers
+db.beers.createIndex({ name: 1 });
+db.beers.createIndex({ brewery: 1 });
+db.beers.createIndex({ style: 1 });
+db.beers.createIndex({ createdBy: 1 });
+
+// Reviews
 db.reviews.createIndex({ beerId: 1, createdAt: -1 });
 db.reviews.createIndex({ userId: 1, createdAt: -1 });
+db.reviews.createIndex({ userId: 1, beerId: 1 }, { unique: true });
 db.reviews.createIndex({ rating: 1 });
 db.reviews.createIndex({ createdAt: -1 });
-db.reviews.createIndex({ 'likes': 1 });
+db.reviews.createIndex({ likes: 1 });
 
-// ============================================
-// COLLECTION: user_profiles
-// Perfis de utilizador com preferências embedded
-// ============================================
-db.createCollection('user_profiles', {
-  validator: {
-    $jsonSchema: {
-      bsonType: 'object',
-      required: ['userId', 'email', 'name'],
-      properties: {
-        userId: { bsonType: 'string' },
-        email: { bsonType: 'string' },
-        name: { bsonType: 'string' },
-        username: { bsonType: 'string' },
-        avatar: { bsonType: 'string' },
-        bio: { bsonType: 'string' },
-        location: { bsonType: 'string' },
-        favoriteBeer: { bsonType: 'string' },
-        preferences: {
-          bsonType: 'object',
-          properties: {
-            favoriteStyles: { bsonType: 'array', items: { bsonType: 'string' } },
-            notificationSettings: { bsonType: 'object' },
-            privacySettings: { bsonType: 'object' }
-          }
-        },
-        stats: {
-          bsonType: 'object',
-          properties: {
-            totalReviews: { bsonType: 'int' },
-            totalLikes: { bsonType: 'int' },
-            avgRating: { bsonType: 'number' }
-          }
-        },
-        createdAt: { bsonType: 'date' },
-        updatedAt: { bsonType: 'date' }
-      }
-    }
-  }
-});
+// Friendships
+db.friendships.createIndex({ requesterId: 1, addresseeId: 1 }, { unique: true });
+db.friendships.createIndex({ addresseeId: 1, status: 1 });
+db.friendships.createIndex({ requesterId: 1, status: 1 });
 
-// Indexes
-db.user_profiles.createIndex({ userId: 1 }, { unique: true });
-db.user_profiles.createIndex({ email: 1 }, { unique: true });
-db.user_profiles.createIndex({ username: 1 }, { unique: true });
-db.user_profiles.createIndex({ location: 1 });
-db.user_profiles.createIndex({ 'preferences.favoriteStyles': 1 });
+// Notifications
+db.notifications.createIndex({ userId: 1, createdAt: -1 });
+db.notifications.createIndex({ userId: 1, isRead: 1 });
 
-// ============================================
-// COLLECTION: beer_details
-// Detalhes extendidos de cervejas (flexível)
-// ============================================
-db.createCollection('beer_details');
+// Conversations
+db.conversations.createIndex({ participants: 1 });
+db.conversations.createIndex({ updatedAt: -1 });
 
-db.beer_details.createIndex({ beerId: 1 }, { unique: true });
-db.beer_details.createIndex({ style: 1 });
-db.beer_details.createIndex({ brewery: 1 });
-db.beer_details.createIndex({ abv: 1 });
-
-// ============================================
-// COLLECTION: activity_logs
-// Logs de atividade para analytics
-// ============================================
-db.createCollection('activity_logs');
-
-db.activity_logs.createIndex({ userId: 1, timestamp: -1 });
-db.activity_logs.createIndex({ action: 1, timestamp: -1 });
-db.activity_logs.createIndex({ timestamp: 1 }, { expireAfterSeconds: 2592000 }); // TTL: 30 dias
-
-print('MongoDB initialized successfully!');
+print('MongoDB initialized successfully with all collections and indexes!');

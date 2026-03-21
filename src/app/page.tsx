@@ -57,7 +57,59 @@ interface Review {
   };
 }
 
-type ViewType = 'feed' | 'beer' | 'profile' | 'chat' | 'add-beer' | 'friends' | 'my-reviews' | 'search';
+type ViewType = 'feed' | 'beer' | 'profile' | 'chat' | 'add-beer' | 'friends' | 'my-reviews' | 'my-beers' | 'search';
+
+function MyBeersView({ currentUser, onBeerClick, onBack }: { currentUser: User; onBeerClick: (id: string) => void; onBack: () => void }) {
+  const [beers, setBeers] = useState<Beer[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    fetch(`/api/beers?createdBy=${currentUser.id}&limit=50`)
+      .then(r => r.json())
+      .then(d => setBeers(d.beers || []))
+      .catch(() => {})
+      .finally(() => setIsLoading(false));
+  }, [currentUser.id]);
+
+  if (isLoading) {
+    return (
+      <div className="space-y-6">
+        <Button variant="ghost" onClick={onBack}>← Voltar</Button>
+        <h1 className="text-2xl font-bold">As Minhas Cervejas</h1>
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="h-8 w-8 animate-spin text-amber-500" />
+        </div>
+      </div>
+    );
+  }
+
+  if (beers.length === 0) {
+    return (
+      <div className="space-y-6">
+        <Button variant="ghost" onClick={onBack}>← Voltar</Button>
+        <h1 className="text-2xl font-bold">As Minhas Cervejas</h1>
+        <Card>
+          <CardContent className="py-12 text-center">
+            <Beer className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
+            <p className="text-muted-foreground">Ainda não adicionaste nenhuma cerveja.</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <Button variant="ghost" onClick={onBack}>← Voltar</Button>
+      <h1 className="text-2xl font-bold">As Minhas Cervejas</h1>
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+        {beers.map(beer => (
+          <BeerCard key={beer.id} beer={beer} onClick={() => onBeerClick(beer.id)} />
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export default function Home() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -66,6 +118,11 @@ export default function Home() {
   const [beers, setBeers] = useState<Beer[]>([]);
   const [reviews, setReviews] = useState<Review[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [reviewsOffset, setReviewsOffset] = useState(0);
+  const [hasMoreReviews, setHasMoreReviews] = useState(false);
+  const [beersOffset, setBeersOffset] = useState(0);
+  const [hasMoreBeers, setHasMoreBeers] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedReviewForComments, setSelectedReviewForComments] = useState<Review | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -120,11 +177,15 @@ export default function Home() {
       if (beersRes.ok) {
         const beersData = await beersRes.json();
         setBeers(beersData.beers);
+        setBeersOffset(0);
+        setHasMoreBeers(beersData.hasMore ?? false);
       }
       
       if (reviewsRes.ok) {
         const reviewsData = await reviewsRes.json();
         setReviews(reviewsData.reviews);
+        setReviewsOffset(0);
+        setHasMoreReviews(reviewsData.hasMore ?? false);
       }
     } catch (error) {
       console.error('Error loading data:', error);
@@ -132,6 +193,42 @@ export default function Home() {
       if (showLoader) {
         setIsLoading(false);
       }
+    }
+  };
+
+  const loadMoreReviews = async () => {
+    setIsLoadingMore(true);
+    const nextOffset = reviewsOffset + 10;
+    try {
+      const res = await fetch(`/api/reviews?limit=10&offset=${nextOffset}`);
+      if (res.ok) {
+        const data = await res.json();
+        setReviews(prev => [...prev, ...data.reviews]);
+        setReviewsOffset(nextOffset);
+        setHasMoreReviews(data.hasMore ?? false);
+      }
+    } catch (error) {
+      console.error('Error loading more reviews:', error);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  };
+
+  const loadMoreBeers = async () => {
+    setIsLoadingMore(true);
+    const nextOffset = beersOffset + 12;
+    try {
+      const res = await fetch(`/api/beers?limit=12&offset=${nextOffset}`);
+      if (res.ok) {
+        const data = await res.json();
+        setBeers(prev => [...prev, ...data.beers]);
+        setBeersOffset(nextOffset);
+        setHasMoreBeers(data.hasMore ?? false);
+      }
+    } catch (error) {
+      console.error('Error loading more beers:', error);
+    } finally {
+      setIsLoadingMore(false);
     }
   };
 
@@ -276,6 +373,14 @@ export default function Home() {
           </div>
         );
       
+      case 'my-beers': {
+        if (!currentUser) {
+          setShowAuthModal(true);
+          return null;
+        }
+        return <MyBeersView currentUser={currentUser} onBeerClick={(beerId) => handleNavigate('beer', beerId)} onBack={() => setView('feed')} />;
+      }
+
       case 'search':
         return (
           <div className="space-y-6">
@@ -354,6 +459,14 @@ export default function Home() {
             onClick={() => handleNavigate('beer', beer.id)}
           />
         ))}
+        {hasMoreBeers && (
+          <div className="col-span-full flex justify-center mt-2">
+            <Button variant="outline" onClick={loadMoreBeers} disabled={isLoadingMore}>
+              {isLoadingMore && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+              Carregar mais cervejas
+            </Button>
+          </div>
+        )}
       </div>
     );
   };
@@ -393,6 +506,14 @@ export default function Home() {
             onLikeToggle={handleLikeToggle}
           />
         ))}
+        {hasMoreReviews && (
+          <div className="flex justify-center mt-2">
+            <Button variant="outline" onClick={loadMoreReviews} disabled={isLoadingMore}>
+              {isLoadingMore && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+              Carregar mais reviews
+            </Button>
+          </div>
+        )}
       </div>
     );
   };

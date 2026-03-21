@@ -26,7 +26,7 @@ async function seedUsers() {
     try {
       const hashedPassword = await hashPassword(user.password);
 
-      const result = await mongo.db.collection('user_profiles').insertOne({
+      const result = await mongo.db.collection('users').insertOne({
         _id: `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         email: user.email,
         password: hashedPassword,

@@ -44,12 +44,14 @@ export async function GET(request: NextRequest) {
     const searchParams = request.nextUrl.searchParams;
     const search = searchParams.get('search') || '';
     const style = searchParams.get('style') || '';
-    const limit = parseInt(searchParams.get('limit') || '20');
-    const offset = parseInt(searchParams.get('offset') || '0');
+    const createdBy = searchParams.get('createdBy') || '';
+    const limit = Number.parseInt(searchParams.get('limit') || '20');
+    const offset = Number.parseInt(searchParams.get('offset') || '0');
 
-    const filter: { search?: string; style?: string } = {};
+    const filter: { search?: string; style?: string; createdBy?: string } = {};
     if (search) filter.search = search;
     if (style) filter.style = style;
+    if (createdBy) filter.createdBy = createdBy;
 
     // Redis cache - short TTL for beer list (ratings change frequently)
     const redis = await getRedis();
@@ -103,6 +105,9 @@ export async function GET(request: NextRequest) {
       },
       beers: beersWithStats,
       total,
+      hasMore: offset + beersWithStats.length < total,
+      offset,
+      limit,
     };
 
     await redis.setCache(cacheKey, result, 60);

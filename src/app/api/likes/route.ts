@@ -148,12 +148,17 @@ export async function POST(request: NextRequest) {
       }));
     }
 
-    // Cassandra: incrementar likes_count no timeline
+    // Cassandra: incrementar likes_count no timeline + log activity
     try {
       const cassandra = await getCassandra();
-      await cassandra.incrementTimelineLikes(reviewId, review.userId, review.createdAt);
+      await Promise.all([
+        cassandra.incrementTimelineLikes(reviewId, review.userId, review.createdAt),
+        alreadyLiked
+          ? Promise.resolve()
+          : cassandra.logActivity(user.id, 'LIKE', review.beerId, review.beerName),
+      ]);
     } catch (e) {
-      console.warn('Cassandra incrementTimelineLikes failed:', e);
+      console.warn('Cassandra incrementTimelineLikes/logActivity failed:', e);
     }
 
     // Invalidar cache

@@ -94,6 +94,9 @@ export async function GET(request: NextRequest) {
       };
     });
 
+    // hasMore: se recebemos um página completa, provavelmente há mais
+    const hasMore = reviews.length === limit;
+
     const response = {
       technology: {
         storage: 'MongoDB (reviews collection)',
@@ -102,6 +105,9 @@ export async function GET(request: NextRequest) {
         indexes: ['beerId_1_createdAt_-1', 'userId_1_createdAt_-1'],
       },
       reviews: transformedReviews,
+      hasMore,
+      offset,
+      limit,
     };
     await redis.setCache(cacheKey, response, 30);
     return NextResponse.json(response);
@@ -184,16 +190,17 @@ export async function POST(request: NextRequest) {
     try {
       const beer = await mongo.getBeerById(beerId);
       const creatorId = beer?.createdBy;
+      const resolvedBeerName = reviewBeerName || beerName || beer?.name || 'esta cerveja';
 
       if (creatorId && creatorId !== user.id) {
         await mongo.createNotification({
           userId: creatorId,
           type: 'BEER_REVIEW',
-          title: 'Nova Review na tua Cerveja',
-          message: `${user.name} fez uma review à tua cerveja "${reviewBeerName || beerName}"`,
+          title: 'Nova review na sua cerveja',
+          message: `${user.name} fez uma review da sua cerveja "${resolvedBeerName}"`,
           data: JSON.stringify({ 
             beerId, 
-            beerName: reviewBeerName || beerName, 
+            beerName: resolvedBeerName, 
             reviewId: review._id,
             reviewerId: user.id,
             reviewerName: user.name,

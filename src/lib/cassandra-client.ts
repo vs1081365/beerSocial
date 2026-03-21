@@ -56,17 +56,6 @@ export interface MessageRow {
   is_read: boolean;
 }
 
-export interface NotificationRow {
-  user_id: string;
-  created_at: Date;
-  notification_id: string;
-  type: string;
-  title: string;
-  message: string;
-  data: string;
-  is_read: boolean;
-}
-
 export interface UserActivityRow {
   user_id: string;
   created_at: Date;
@@ -150,8 +139,8 @@ class CassandraClient {
         beer_style TEXT,
         rating DECIMAL,
         content TEXT,
-        likes_count COUNTER,
-        comments_count COUNTER,
+        likes_count INT,
+        comments_count INT,
         PRIMARY KEY (user_id, created_at)
       ) WITH CLUSTERING ORDER BY (created_at DESC)
         AND default_time_to_live = 604800`,
@@ -172,58 +161,44 @@ class CassandraClient {
       `CREATE INDEX IF NOT EXISTS idx_messages_receiver_id ON messages (receiver_id)`,
 
       
-      // Notifications - Ordenadas por tempo
-      `CREATE TABLE IF NOT EXISTS notifications (
-        user_id UUID,
-        created_at TIMESTAMP,
-        notification_id UUID,
-        type TEXT,
-        title TEXT,
-        message TEXT,
-        data TEXT,
-        is_read BOOLEAN,
-        PRIMARY KEY (user_id, created_at)
-      ) WITH CLUSTERING ORDER BY (created_at DESC)
-        AND default_time_to_live = 2592000`,
-      
-      // User Activity
+      // User Activity — TEXT IDs (MongoDB IDs are not UUIDs)
       `CREATE TABLE IF NOT EXISTS user_activity (
-        user_id UUID,
+        user_id TEXT,
         created_at TIMESTAMP,
         activity_id UUID,
         activity_type TEXT,
-        beer_id UUID,
+        beer_id TEXT,
         beer_name TEXT,
         rating DECIMAL,
         content TEXT,
         PRIMARY KEY (user_id, created_at)
       ) WITH CLUSTERING ORDER BY (created_at DESC)`,
       
-      // Beer Reviews Index
+      // Beer Reviews Index — TEXT IDs
       `CREATE TABLE IF NOT EXISTS beer_reviews_index (
-        beer_id UUID,
+        beer_id TEXT,
         created_at TIMESTAMP,
         review_id UUID,
-        user_id UUID,
+        user_id TEXT,
         user_name TEXT,
         rating DECIMAL,
         content TEXT,
         PRIMARY KEY (beer_id, created_at)
       ) WITH CLUSTERING ORDER BY (created_at DESC)`,
       
-      // Followers
+      // Followers — TEXT IDs
       `CREATE TABLE IF NOT EXISTS followers (
-        user_id UUID,
-        follower_id UUID,
+        user_id TEXT,
+        follower_id TEXT,
         follower_name TEXT,
         followed_at TIMESTAMP,
         PRIMARY KEY (user_id, follower_id)
       )`,
       
-      // Following
+      // Following — TEXT IDs
       `CREATE TABLE IF NOT EXISTS following (
-        user_id UUID,
-        following_id UUID,
+        user_id TEXT,
+        following_id TEXT,
         following_name TEXT,
         followed_at TIMESTAMP,
         PRIMARY KEY (user_id, following_id)
@@ -244,6 +219,55 @@ class CassandraClient {
       } catch (error) {
         // Ignorar erros de tabela já existente
         console.warn('Cassandra table creation warning:', error);
+      }
+    }
+
+    // Migrate user_activity, beer_reviews_index, followers, following to TEXT IDs
+    // (MongoDB IDs like 'user_123_abc' are not UUIDs)
+    const textMigrations: Array<{ table: string; col: string; queries: string[] }> = [
+      {
+        table: 'user_activity',
+        col: 'user_id',
+        queries: [
+          `CREATE TABLE IF NOT EXISTS user_activity (user_id TEXT, created_at TIMESTAMP, activity_id UUID, activity_type TEXT, beer_id TEXT, beer_name TEXT, rating DECIMAL, content TEXT, PRIMARY KEY (user_id, created_at)) WITH CLUSTERING ORDER BY (created_at DESC)`,
+        ],
+      },
+      {
+        table: 'beer_reviews_index',
+        col: 'beer_id',
+        queries: [
+          `CREATE TABLE IF NOT EXISTS beer_reviews_index (beer_id TEXT, created_at TIMESTAMP, review_id UUID, user_id TEXT, user_name TEXT, rating DECIMAL, content TEXT, PRIMARY KEY (beer_id, created_at)) WITH CLUSTERING ORDER BY (created_at DESC)`,
+        ],
+      },
+      {
+        table: 'followers',
+        col: 'user_id',
+        queries: [`CREATE TABLE IF NOT EXISTS followers (user_id TEXT, follower_id TEXT, follower_name TEXT, followed_at TIMESTAMP, PRIMARY KEY (user_id, follower_id))`],
+      },
+      {
+        table: 'following',
+        col: 'user_id',
+        queries: [`CREATE TABLE IF NOT EXISTS following (user_id TEXT, following_id TEXT, following_name TEXT, followed_at TIMESTAMP, PRIMARY KEY (user_id, following_id))`],
+      },
+    ];
+
+    for (const migration of textMigrations) {
+      try {
+        const colInfo = await this.client.execute(
+          "SELECT type FROM system_schema.columns WHERE keyspace_name = ? AND table_name = ? AND column_name = ?",
+          [this.client.keyspace, migration.table, migration.col],
+          { prepare: true }
+        );
+        const colType = colInfo.first()?.type as string | undefined;
+        if (colType && colType.toLowerCase() === 'uuid') {
+          console.log(`Migrating ${migration.table}.${migration.col} from UUID to TEXT`);
+          await this.client.execute(`DROP TABLE IF EXISTS ${migration.table}`);
+          for (const q of migration.queries) {
+            await this.client.execute(q);
+          }
+        }
+      } catch (e) {
+        console.warn(`Could not migrate ${migration.table} schema:`, e);
       }
     }
 
@@ -317,41 +341,15 @@ class CassandraClient {
         review.beer_style,
         review.rating,
         review.content,
-        types.Long.fromNumber(0),
-        types.Long.fromNumber(0),
+        0,
+        0,
       ]
     }));
 
     await this.client.batch(queries, { prepare: true });
   }
 
-  // Query: Obter feed de um utilizador (eficiente pela partition key)
-  async getTimeline(userId: string, limit = 20): Promise<UserTimelineRow[]> {
-    if (!this.client) throw new Error('Cassandra not connected');
-
-    const query = `SELECT user_id, created_at, review_id, author_id, author_name, beer_id, beer_name, beer_style, rating, content, likes_count, comments_count FROM user_timeline
-      WHERE user_id = ? 
-      LIMIT ?`;
-    
-    const result = await this.client.execute(query, [Uuid.fromString(userId), limit], { prepare: true });
-    
-    return result.rows.map(row => ({
-      user_id: row.user_id?.toString() || '',
-      created_at: row.created_at as Date,
-      review_id: row.review_id?.toString() || '',
-      author_id: row.author_id?.toString() || '',
-      author_name: row.author_name as string,
-      beer_id: row.beer_id?.toString() || '',
-      beer_name: row.beer_name as string,
-      beer_style: row.beer_style as string,
-      rating: parseFloat(row.rating?.toString() || '0'),
-      content: row.content as string,
-      likes_count: parseInt(row.likes_count?.toString() || '0'),
-      comments_count: parseInt(row.comments_count?.toString() || '0'),
-    }));
-  }
-
-  // Update counter para likes (Cassandra counter update)
+  // Increment likes_count on an INT column (read + set)
   async incrementTimelineLikes(reviewId: string, userId: string, createdAt: Date): Promise<void> {
     if (!this.client) throw new Error('Cassandra not connected');
     if (!isValidUuid(userId)) {
@@ -359,11 +357,16 @@ class CassandraClient {
       return;
     }
 
-    const query = `UPDATE user_timeline 
-      SET likes_count = likes_count + 1 
+    const selectQuery = `SELECT likes_count FROM user_timeline
       WHERE user_id = ? AND created_at = ?`;
-    
-    await this.client.execute(query, [Uuid.fromString(userId), createdAt], { prepare: true });
+    const current = await this.client.execute(selectQuery, [Uuid.fromString(userId), createdAt], { prepare: true });
+    const currentLikes = Number(current.first()?.likes_count ?? 0);
+
+    const query = `UPDATE user_timeline
+      SET likes_count = ?
+      WHERE user_id = ? AND created_at = ?`;
+
+    await this.client.execute(query, [currentLikes + 1, Uuid.fromString(userId), createdAt], { prepare: true });
   }
 
   // ==========================================
@@ -463,81 +466,6 @@ class CassandraClient {
   }
 
   // ==========================================
-  // NOTIFICATIONS - Notificações do utilizador
-  // Partition Key: user_id | Clustering Key: created_at DESC
-  // ==========================================
-
-  async createNotification(
-    userId: string,
-    type: string,
-    title: string,
-    message: string,
-    data: Record<string, unknown>
-  ): Promise<NotificationRow> {
-    if (!this.client) throw new Error('Cassandra not connected');
-
-    const createdAt = new Date();
-    const notificationId = Uuid.random();
-
-    const query = `INSERT INTO notifications 
-      (user_id, created_at, notification_id, type, title, message, data, is_read)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
-    
-    await this.client.execute(query, [
-      Uuid.fromString(userId),
-      createdAt,
-      notificationId,
-      type,
-      title,
-      message,
-      JSON.stringify(data),
-      false,
-    ], { prepare: true });
-
-    return {
-      user_id: userId,
-      created_at: createdAt,
-      notification_id: notificationId.toString(),
-      type,
-      title,
-      message,
-      data: JSON.stringify(data),
-      is_read: false,
-    };
-  }
-
-  // Query: Obter notificações (eficiente pela partition key)
-  async getNotifications(userId: string, limit = 20): Promise<NotificationRow[]> {
-    if (!this.client) throw new Error('Cassandra not connected');
-
-    const query = `SELECT * FROM notifications 
-      WHERE user_id = ? 
-      LIMIT ?`;
-    
-    const result = await this.client.execute(query, [Uuid.fromString(userId), limit], { prepare: true });
-
-    return result.rows.map(row => ({
-      user_id: row.user_id?.toString() || '',
-      created_at: row.created_at as Date,
-      notification_id: row.notification_id?.toString() || '',
-      type: row.type as string,
-      title: row.title as string,
-      message: row.message as string,
-      data: row.data as string,
-      is_read: row.is_read as boolean,
-    }));
-  }
-
-  async markNotificationRead(userId: string, createdAt: Date): Promise<void> {
-    if (!this.client) throw new Error('Cassandra not connected');
-
-    const query = `UPDATE notifications SET is_read = true 
-      WHERE user_id = ? AND created_at = ?`;
-    
-    await this.client.execute(query, [Uuid.fromString(userId), createdAt], { prepare: true });
-  }
-
-  // ==========================================
   // USER ACTIVITY - Atividade do utilizador
   // Partition Key: user_id | Clustering Key: created_at DESC
   // ==========================================
@@ -551,10 +479,7 @@ class CassandraClient {
     content?: string
   ): Promise<void> {
     if (!this.client) throw new Error('Cassandra not connected');
-    if (!isValidUuid(userId) || !isValidUuid(beerId)) {
-      console.warn('logActivity: skipping — IDs are not UUID format', { userId, beerId });
-      return;
-    }
+    if (!userId || !beerId) return;
 
     const createdAt = new Date();
     const activityId = Uuid.random();
@@ -564,11 +489,11 @@ class CassandraClient {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
     
     await this.client.execute(query, [
-      Uuid.fromString(userId),
+      userId,
       createdAt,
       activityId,
       activityType,
-      Uuid.fromString(beerId),
+      beerId,
       beerName,
       rating || 0,
       content || '',
@@ -582,7 +507,7 @@ class CassandraClient {
       WHERE user_id = ? 
       LIMIT ?`;
     
-    const result = await this.client.execute(query, [Uuid.fromString(userId), limit], { prepare: true });
+    const result = await this.client.execute(query, [userId, limit], { prepare: true });
 
     return result.rows.map(row => ({
       user_id: row.user_id?.toString() || '',
@@ -609,10 +534,7 @@ class CassandraClient {
     content: string
   ): Promise<void> {
     if (!this.client) throw new Error('Cassandra not connected');
-    if (!isValidUuid(beerId) || !isValidUuid(userId)) {
-      console.warn('indexBeerReview: skipping — IDs are not UUID format', { beerId, userId });
-      return;
-    }
+    if (!beerId || !userId) return;
 
     const createdAt = new Date();
     const reviewId = Uuid.random();
@@ -622,10 +544,10 @@ class CassandraClient {
       VALUES (?, ?, ?, ?, ?, ?, ?)`;
     
     await this.client.execute(query, [
-      Uuid.fromString(beerId),
+      beerId,
       createdAt,
       reviewId,
-      Uuid.fromString(userId),
+      userId,
       userName,
       rating,
       content,
@@ -640,7 +562,7 @@ class CassandraClient {
       WHERE beer_id = ? 
       LIMIT ?`;
     
-    const result = await this.client.execute(query, [Uuid.fromString(beerId), limit], { prepare: true });
+    const result = await this.client.execute(query, [beerId, limit], { prepare: true });
 
     return result.rows.map(row => ({
       beer_id: row.beer_id?.toString() || '',
@@ -660,27 +582,18 @@ class CassandraClient {
 
   async followUser(userId: string, followerId: string, followerName: string): Promise<void> {
     if (!this.client) throw new Error('Cassandra not connected');
-    if (!isValidUuid(userId) || !isValidUuid(followerId)) {
-      console.warn('followUser: skipping — IDs are not UUID format', { userId, followerId });
-      return;
-    }
-
-    // Cassandra schema uses UUID for user IDs; skip sync when app IDs are not UUID.
-    if (!this.isValidUuid(userId) || !this.isValidUuid(followerId)) {
-      return;
-    }
+    if (!userId || !followerId) return;
 
     const followedAt = new Date();
 
-    // Insert em ambas as tabelas (followers e following)
     const queries = [
       {
         query: `INSERT INTO followers (user_id, follower_id, follower_name, followed_at) VALUES (?, ?, ?, ?)`,
-        params: [Uuid.fromString(userId), Uuid.fromString(followerId), followerName, followedAt]
+        params: [userId, followerId, followerName, followedAt]
       },
       {
         query: `INSERT INTO following (user_id, following_id, following_name, followed_at) VALUES (?, ?, ?, ?)`,
-        params: [Uuid.fromString(followerId), Uuid.fromString(userId), followerName, followedAt]
+        params: [followerId, userId, followerName, followedAt]
       }
     ];
 
@@ -690,15 +603,45 @@ class CassandraClient {
     );
   }
 
+  async unfollowUser(userId: string, followerId: string): Promise<void> {
+    if (!this.client) throw new Error('Cassandra not connected');
+    if (!userId || !followerId) return;
+
+    const queries = [
+      {
+        query: `DELETE FROM followers WHERE user_id = ? AND follower_id = ?`,
+        params: [userId, followerId]
+      },
+      {
+        query: `DELETE FROM following WHERE user_id = ? AND following_id = ?`,
+        params: [followerId, userId]
+      }
+    ];
+
+    await this.client.batch(
+      queries.map(q => ({ query: q.query, params: q.params })),
+      { prepare: true }
+    );
+  }
+
+  async isFollowing(userId: string, followerId: string): Promise<boolean> {
+    if (!this.client) throw new Error('Cassandra not connected');
+    if (!userId || !followerId) return false;
+
+    const query = `SELECT follower_id FROM followers WHERE user_id = ? AND follower_id = ?`;
+    const result = await this.client.execute(query, [userId, followerId], { prepare: true });
+    return result.rowLength > 0;
+  }
+
   async getFollowers(userId: string, limit = 100): Promise<FollowerRow[]> {
     if (!this.client) throw new Error('Cassandra not connected');
 
     const query = `SELECT * FROM followers WHERE user_id = ? LIMIT ?`;
-    const result = await this.client.execute(query, [Uuid.fromString(userId), limit], { prepare: true });
+    const result = await this.client.execute(query, [userId, limit], { prepare: true });
 
     return result.rows.map(row => ({
-      user_id: row.user_id?.toString() || '',
-      follower_id: row.follower_id?.toString() || '',
+      user_id: row.user_id as string,
+      follower_id: row.follower_id as string,
       follower_name: row.follower_name as string,
       followed_at: row.followed_at as Date,
     }));
@@ -708,11 +651,11 @@ class CassandraClient {
     if (!this.client) throw new Error('Cassandra not connected');
 
     const query = `SELECT * FROM following WHERE user_id = ? LIMIT ?`;
-    const result = await this.client.execute(query, [Uuid.fromString(userId), limit], { prepare: true });
+    const result = await this.client.execute(query, [userId, limit], { prepare: true });
 
     return result.rows.map(row => ({
-      user_id: row.user_id?.toString() || '',
-      follower_id: row.following_id?.toString() || '',
+      user_id: row.user_id as string,
+      follower_id: row.following_id as string,
       follower_name: row.following_name as string,
       followed_at: row.followed_at as Date,
     }));

@@ -22,7 +22,7 @@ import {
   SheetTrigger,
 } from '@/components/ui/sheet';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Beer, Bell, MessageCircle, Search, Users, LogOut, User, Beer as BeerIcon, Plus, Loader2, Check, X, UserPlus } from 'lucide-react';
+import { Beer, Bell, MessageCircle, Search, Users, LogOut, User, Beer as BeerIcon, Plus, Loader2, Check, X, UserPlus, Star } from 'lucide-react';
 import { AuthModal } from './AuthModal';
 
 interface User {
@@ -463,8 +463,12 @@ export function Header({ currentUser, onAuth, onLogout, onSearch, onNavigate }: 
                     Meu Perfil
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => onNavigate('my-reviews')}>
-                    <Beer className="mr-2 h-4 w-4" />
+                    <Star className="mr-2 h-4 w-4" />
                     Minhas Reviews
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => onNavigate('my-beers')}>
+                    <BeerIcon className="mr-2 h-4 w-4" />
+                    Minhas Cervejas
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={handleLogout} className="text-red-500">
