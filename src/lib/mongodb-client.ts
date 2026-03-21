@@ -453,7 +453,7 @@ class MongoDBClient {
     }
   }
 
-  async getBeers(filter: { search?: string; style?: string }, limit = 20, offset = 0): Promise<BeerDocument[]> {
+  async getBeers(filter: { search?: string; style?: string; createdBy?: string }, limit = 20, offset = 0): Promise<BeerDocument[]> {
     if (!this.beers) throw new Error('MongoDB not connected');
     
     const query: Record<string, unknown> = {};
@@ -467,6 +467,10 @@ class MongoDBClient {
     
     if (filter.style) {
       query.style = { $regex: filter.style, $options: 'i' };
+    }
+
+    if (filter.createdBy) {
+      query.createdBy = filter.createdBy;
     }
     
     return this.beers
@@ -484,7 +488,7 @@ class MongoDBClient {
     return this.beers.find({}).project(BEER_SAFE_PROJECTION).sort({ createdAt: -1 }).toArray() as Promise<BeerDocument[]>;
   }
 
-  async countBeers(filter: { search?: string; style?: string } = {}): Promise<number> {
+  async countBeers(filter: { search?: string; style?: string; createdBy?: string } = {}): Promise<number> {
     if (!this.beers) throw new Error('MongoDB not connected');
     
     const query: Record<string, unknown> = {};
@@ -498,6 +502,10 @@ class MongoDBClient {
     
     if (filter.style) {
       query.style = { $regex: filter.style, $options: 'i' };
+    }
+
+    if (filter.createdBy) {
+      query.createdBy = filter.createdBy;
     }
     
     return this.beers.countDocuments(query);

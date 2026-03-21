@@ -11,6 +11,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getMongoDB } from '@/lib/mongodb-client';
 import { getCurrentUser } from '@/lib/auth';
 import { getRedis } from '@/lib/redis-client';
+import { getCassandra } from '@/lib/cassandra-client';
 
 export async function GET(
   request: NextRequest,
@@ -19,20 +20,47 @@ export async function GET(
   try {
     const { id } = await params;
 
-    // Tentar cache
+    // getCurrentUser antes do cache — isFollowing/friendshipStatus são viewer-specific e NÃO devem ser cacheados
+    const currentUser = await getCurrentUser();
+
     const redis = await getRedis();
     const cacheKey = `user:${id}`;
-    const cached = await redis.getCache(cacheKey);
-    
+    const cached = await redis.getCache<{ technology: unknown; user: Record<string, unknown> }>(cacheKey);
+
+    // Dados viewer-specific: calculados sempre (nunca cacheados)
+    let isFollowing = false;
+    let friendshipStatus = null;
+
+    if (currentUser && currentUser.id !== id) {
+      try {
+        const [cassandra, mongo] = await Promise.all([getCassandra(), getMongoDB()]);
+        const [cassIsFollowing, friendship] = await Promise.all([
+          cassandra.isFollowing(id, currentUser.id),
+          mongo.getFriendshipBetween(currentUser.id, id),
+        ]);
+        isFollowing = cassIsFollowing;
+        if (friendship) {
+          friendshipStatus = {
+            status: friendship.status,
+            isRequester: friendship.requesterId === currentUser.id,
+            friendshipId: friendship._id,
+          };
+        }
+      } catch (e) {
+        console.warn('Could not fetch viewer-specific data:', e);
+      }
+    }
+
     if (cached) {
       return NextResponse.json({
         ...cached,
+        user: { ...cached.user, isFollowing, friendshipStatus },
         _cached: true,
       });
     }
 
     const mongo = await getMongoDB();
-    
+
     const user = await mongo.getUserById(id);
     if (!user) {
       return NextResponse.json(
@@ -51,24 +79,27 @@ export async function GET(
       ? reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length
       : 0;
 
-    // Verificar estado de amizade
-    const currentUser = await getCurrentUser();
-    let friendshipStatus = null;
-    
-    if (currentUser && currentUser.id !== id) {
-      const friendship = await mongo.getFriendshipBetween(currentUser.id, id);
-      if (friendship) {
-        friendshipStatus = {
-          status: friendship.status,
-          isRequester: friendship.requesterId === currentUser.id,
-          friendshipId: friendship._id,
-        };
-      }
+    // Contadores de seguidores (Cassandra) — viewer-independent
+    let followerCount = 0;
+    let followingCount = 0;
+
+    try {
+      const cassandra = await getCassandra();
+      const [followers, following] = await Promise.all([
+        cassandra.getFollowers(id),
+        cassandra.getFollowing(id),
+      ]);
+      followerCount = followers.length;
+      followingCount = following.length;
+    } catch (e) {
+      console.warn('Could not fetch follower counts from Cassandra:', e);
     }
 
-    const result = {
+    // Cachear apenas dados estáveis (sem isFollowing / friendshipStatus)
+    const stableResult = {
       technology: {
         storage: 'MongoDB (users collection)',
+        followers: 'Cassandra (followers/following tables)',
         cache: 'Redis (TTL 300s)',
         indexes: ['_id', 'email_1 (unique)', 'username_1 (unique)'],
       },
@@ -85,14 +116,18 @@ export async function GET(
         avgRating: Math.round(avgRating * 10) / 10,
         friendsCount,
         reviewsCount: reviews.length,
-        friendshipStatus,
+        followerCount,
+        followingCount,
       },
     };
 
-    // Cache por 5 minutos
-    await redis.setCache(cacheKey, result, 300);
+    // Cache por 5 minutos (sem dados viewer-specific)
+    await redis.setCache(cacheKey, stableResult, 300);
 
-    return NextResponse.json(result);
+    return NextResponse.json({
+      ...stableResult,
+      user: { ...stableResult.user, isFollowing, friendshipStatus },
+    });
   } catch (error) {
     console.error('Get user error:', error);
     return NextResponse.json(

@@ -94,6 +94,9 @@ export async function GET(request: NextRequest) {
       };
     });
 
+    // hasMore: se recebemos um página completa, provavelmente há mais
+    const hasMore = reviews.length === limit;
+
     const response = {
       technology: {
         storage: 'MongoDB (reviews collection)',
@@ -102,6 +105,9 @@ export async function GET(request: NextRequest) {
         indexes: ['beerId_1_createdAt_-1', 'userId_1_createdAt_-1'],
       },
       reviews: transformedReviews,
+      hasMore,
+      offset,
+      limit,
     };
     await redis.setCache(cacheKey, response, 30);
     return NextResponse.json(response);

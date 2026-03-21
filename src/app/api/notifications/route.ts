@@ -24,19 +24,18 @@ export async function GET(request: NextRequest) {
     const limit = parseInt(searchParams.get('limit') || '20');
     const offset = parseInt(searchParams.get('offset') || '0');
 
-    // Tentar cache primeiro (apenas contador)
     const redis = await getRedis();
     const cacheKey = `notifications:${user.id}:count`;
     const cachedCount = await redis.getCache<number>(cacheKey);
 
     const mongo = await getMongoDB();
-    
+
+    // Se o contador estiver em cache, evitar query extra ao MongoDB
     const [notifications, unreadCount] = await Promise.all([
       mongo.getNotifications(user.id, limit, offset),
-      mongo.countUnreadNotifications(user.id),
+      cachedCount === null ? mongo.countUnreadNotifications(user.id) : Promise.resolve(cachedCount),
     ]);
 
-    // Cache do contador
     if (cachedCount === null) {
       await redis.setCache(cacheKey, unreadCount, 10); // 10 segundos
     }
