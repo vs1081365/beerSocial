@@ -55,7 +55,7 @@ export async function GET(request: NextRequest) {
 
     // Redis cache - short TTL for beer list (ratings change frequently)
     const redis = await getRedis();
-    const cacheKey = `beers:list:${search}:${style}:${limit}:${offset}`;
+    const cacheKey = `beers:list:${search}:${style}:${createdBy}:${limit}:${offset}`;
     const cached = await redis.getCache(cacheKey);
     if (cached) {
       return NextResponse.json(cached);
