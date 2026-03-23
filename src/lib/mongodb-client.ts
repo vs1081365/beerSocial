@@ -11,7 +11,7 @@
  * - Logs de atividade para analytics
  */
 
-import { MongoClient as MongoDriver, Db, Collection, Document, WithId, ObjectId, BSON } from 'mongodb';
+import { MongoClient as MongoDriver, Db, Collection, Document, ObjectId, BSON } from 'mongodb';
 
 // ==========================================
 // TIPOS
@@ -44,6 +44,15 @@ export interface BeerDocument extends Document {
   createdBy?: string; // User ID of the beer creator
   createdAt: Date;
   updatedAt: Date;
+}
+
+function normalizeBeerIdentityPart(value: string): string {
+  return value
+    .normalize('NFC')
+    .trim()
+    .split(/\s+/)
+    .join(' ')
+    .toLocaleLowerCase('pt-PT');
 }
 
 const BEER_SAFE_PROJECTION = {
@@ -228,7 +237,7 @@ class MongoDBClient {
 
   private normalizeMongoUrl(url: string): string {
     // Docker compose creates a root user in admin; ensure authSource is explicit.
-    if (!url || !url.startsWith('mongodb')) {
+    if (!url?.startsWith('mongodb')) {
       return url;
     }
 
@@ -366,7 +375,7 @@ class MongoDBClient {
       const objectId = new ObjectId(id);
       const user = await this.users.findOne({ _id: objectId });
       if (user) return user;
-    } catch (e) {
+    } catch {
       // Not a valid ObjectId, continue to string search
     }
     
@@ -464,6 +473,23 @@ class MongoDBClient {
     }
   }
 
+  async findBeerByNameAndBrewery(name: string, brewery: string): Promise<BeerDocument | null> {
+    if (!this.beers) throw new Error('MongoDB not connected');
+
+    const normalizedName = normalizeBeerIdentityPart(name);
+    const normalizedBrewery = normalizeBeerIdentityPart(brewery);
+
+    const beers = await this.beers
+      .find({}, { projection: BEER_SAFE_PROJECTION })
+      .sort({ createdAt: 1 })
+      .toArray() as BeerDocument[];
+
+    return beers.find((beer) => (
+      normalizeBeerIdentityPart(beer.name) === normalizedName
+      && normalizeBeerIdentityPart(beer.brewery) === normalizedBrewery
+    )) || null;
+  }
+
   async getBeers(filter: { search?: string; style?: string; createdBy?: string }, limit = 20, offset = 0): Promise<BeerDocument[]> {
     if (!this.beers) throw new Error('MongoDB not connected');
     
@@ -531,7 +557,7 @@ class MongoDBClient {
     
     const now = new Date();
     const doc: ReviewDocument = {
-      _id: `review_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      _id: `review_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`,
       beerId: review.beerId,
       beerName: review.beerName,
       userId: review.userId,
@@ -679,7 +705,7 @@ class MongoDBClient {
     
     const now = new Date();
     const doc: FriendshipDocument = {
-      _id: `friend_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      _id: `friend_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`,
       addresseeId: friendship.addresseeId,
       addresseeName: friendship.addresseeName,
       requesterId: friendship.requesterId,
@@ -770,7 +796,7 @@ class MongoDBClient {
     if (!this.notifications) throw new Error('MongoDB not connected');
     
     const doc: NotificationDocument = {
-      _id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      _id: `notif_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`,
       data: notification.data,
       message: notification.message,
       title: notification.title,
@@ -896,7 +922,7 @@ class MongoDBClient {
     
     const now = new Date();
     const doc: ConversationDocument = {
-      _id: `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      _id: `conv_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`,
       participants,
       participantNames,
       createdAt: now,

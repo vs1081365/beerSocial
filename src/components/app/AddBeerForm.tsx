@@ -13,7 +13,16 @@ interface AddBeerFormProps {
   onSuccess: (beerId: string) => void;
 }
 
-export function AddBeerForm({ onBack, onSuccess }: AddBeerFormProps) {
+type CreateBeerResponse = {
+  error?: string;
+  duplicate?: boolean;
+  beer?: {
+    id?: string;
+    _id?: string;
+  };
+};
+
+export function AddBeerForm({ onBack, onSuccess }: Readonly<AddBeerFormProps>) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -33,7 +42,7 @@ export function AddBeerForm({ onBack, onSuccess }: AddBeerFormProps) {
     'Amber Ale', 'Bock', 'Weissbier', 'Tripel', 'Quadrupel'
   ];
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.SyntheticEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError('');
 
@@ -51,22 +60,30 @@ export function AddBeerForm({ onBack, onSuccess }: AddBeerFormProps) {
           name,
           brewery,
           style,
-          abv: parseFloat(abv),
-          ibu: ibu ? parseInt(ibu) : null,
+          abv: Number.parseFloat(abv),
+          ibu: ibu ? Number.parseInt(ibu, 10) : null,
           description,
           country,
           image
         })
       });
 
-      const data = await res.json();
+      const data: CreateBeerResponse = await res.json();
+
+      const returnedBeerId = data?.beer?.id || data?.beer?._id;
+
+      if (res.status === 409 && data.duplicate && returnedBeerId) {
+        setError('Essa cerveja já existe. Vou abrir a cerveja existente.');
+        onSuccess(returnedBeerId);
+        return;
+      }
 
       if (!res.ok) {
         setError(data.error || 'Erro ao adicionar cerveja');
         return;
       }
 
-      const createdBeerId = data?.beer?.id || data?.beer?._id;
+      const createdBeerId = returnedBeerId;
       if (!createdBeerId) {
         setError('Cerveja criada, mas não foi possível abrir os detalhes');
         return;

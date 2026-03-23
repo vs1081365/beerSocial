@@ -45,6 +45,7 @@ export async function GET(request: NextRequest) {
     const search = searchParams.get('search') || '';
     const style = searchParams.get('style') || '';
     const createdBy = searchParams.get('createdBy') || '';
+    const isUserScopedRequest = createdBy.length > 0;
     const limit = Number.parseInt(searchParams.get('limit') || '20');
     const offset = Number.parseInt(searchParams.get('offset') || '0');
 
@@ -56,9 +57,11 @@ export async function GET(request: NextRequest) {
     // Redis cache - short TTL for beer list (ratings change frequently)
     const redis = await getRedis();
     const cacheKey = `beers:list:${search}:${style}:${createdBy}:${limit}:${offset}`;
-    const cached = await redis.getCache(cacheKey);
-    if (cached) {
-      return NextResponse.json(cached);
+    if (!isUserScopedRequest) {
+      const cached = await redis.getCache(cacheKey);
+      if (cached) {
+        return NextResponse.json(cached);
+      }
     }
 
     // Track recent searches (fire-and-forget, needs auth)
@@ -110,8 +113,15 @@ export async function GET(request: NextRequest) {
       limit,
     };
 
-    await redis.setCache(cacheKey, result, 60);
-    return NextResponse.json(result);
+    if (!isUserScopedRequest) {
+      await redis.setCache(cacheKey, result, 60);
+    }
+
+    return NextResponse.json(result, {
+      headers: isUserScopedRequest
+        ? { 'Cache-Control': 'private, no-store, max-age=0' }
+        : undefined,
+    });
   } catch (error) {
     console.error('Get beers error:', error);
     return NextResponse.json(
@@ -155,12 +165,21 @@ export async function POST(request: NextRequest) {
 
     const mongo = await getMongoDB();
 
+    const existingBeer = await mongo.findBeerByNameAndBrewery(name, brewery);
+    if (existingBeer) {
+      return NextResponse.json({
+        error: 'Já existe uma cerveja com esse nome e cervejeira',
+        beer: { ...existingBeer, id: existingBeer._id },
+        duplicate: true,
+      }, { status: 409 });
+    }
+
     const beerInput = {
       name,
       brewery,
       style,
-      abv: parseFloat(abv),
-      ibu: ibu ? parseInt(ibu) : undefined,
+      abv: Number.parseFloat(abv),
+      ibu: ibu ? Number.parseInt(ibu, 10) : undefined,
       description,
       image,
       country,
