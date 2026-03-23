@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useToast } from '@/hooks/use-toast';
 import { Header } from '@/components/app/Header';
 import { BeerCard } from '@/components/app/BeerCard';
 import { ReviewCard } from '@/components/app/ReviewCard';
@@ -15,7 +14,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Beer, MessageSquare, Loader2, TrendingUp, Clock, Star } from 'lucide-react';
+import { Beer, MessageSquare, Loader2 } from 'lucide-react';
 
 interface User {
   id: string;
@@ -59,12 +58,18 @@ interface Review {
 
 type ViewType = 'feed' | 'beer' | 'profile' | 'chat' | 'add-beer' | 'friends' | 'my-reviews' | 'my-beers' | 'search';
 
-function MyBeersView({ currentUser, onBeerClick, onBack }: { currentUser: User; onBeerClick: (id: string) => void; onBack: () => void }) {
+function MyBeersView({ currentUser, onBeerClick, onBack }: Readonly<{ currentUser: User; onBeerClick: (id: string) => void; onBack: () => void }>) {
   const [beers, setBeers] = useState<Beer[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`/api/beers?createdBy=${currentUser.id}&limit=50`)
+    setIsLoading(true);
+    setBeers([]);
+
+    fetch(`/api/beers?createdBy=${currentUser.id}&limit=50`, {
+      credentials: 'include',
+      cache: 'no-store',
+    })
       .then(r => r.json())
       .then(d => setBeers(d.beers || []))
       .catch(() => {})
@@ -363,6 +368,7 @@ export default function Home() {
             </Button>
             <h1 className="text-2xl font-bold">As Minhas Reviews</h1>
             <MyReviews 
+              key={currentUser.id}
               userId={currentUser.id}
               onBeerClick={(beerId) => handleNavigate('beer', beerId)}
               onUserClick={(userId) => handleNavigate('profile', userId)}
@@ -378,7 +384,7 @@ export default function Home() {
           setShowAuthModal(true);
           return null;
         }
-        return <MyBeersView currentUser={currentUser} onBeerClick={(beerId) => handleNavigate('beer', beerId)} onBack={() => setView('feed')} />;
+        return <MyBeersView key={currentUser.id} currentUser={currentUser} onBeerClick={(beerId) => handleNavigate('beer', beerId)} onBack={() => setView('feed')} />;
       }
 
       case 'search':
@@ -576,23 +582,29 @@ function MyReviews({
   onOpenComments,
   onLikeToggle,
   currentUser
-}: { 
+}: Readonly<{ 
   userId: string;
   onBeerClick: (id: string) => void;
   onUserClick: (id: string) => void;
   onOpenComments: (review: any) => void;
   onLikeToggle: (reviewId: string, liked: boolean) => void;
   currentUser: User | null;
-}) {
+}>) {
   const [reviews, setReviews] = useState<Review[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     const fetchReviews = async () => {
+      setIsLoading(true);
+      setReviews([]);
+
       try {
-        const res = await fetch(`/api/reviews?userId=${userId}`);
+        const res = await fetch(`/api/reviews?userId=${userId}`, {
+          credentials: 'include',
+          cache: 'no-store',
+        });
         const data = await res.json();
-        setReviews(data.reviews);
+        setReviews(data.reviews || []);
       } catch (error) {
         console.error('Error fetching reviews:', error);
       } finally {

@@ -25,15 +25,18 @@ export async function GET(request: NextRequest) {
     const searchParams = request.nextUrl.searchParams;
     const userId = searchParams.get('userId');
     const beerId = searchParams.get('beerId');
+    const isUserScopedRequest = !!userId;
     const limit = parseInt(searchParams.get('limit') || '20');
     const offset = parseInt(searchParams.get('offset') || '0');
 
     // Redis cache - short TTL (30s) to keep feed fresh
     const redis = await getRedis();
     const cacheKey = `reviews:${beerId || userId || 'all'}:${limit}:${offset}`;
-    const cached = await redis.getCache(cacheKey);
-    if (cached) {
-      return NextResponse.json(cached);
+    if (!isUserScopedRequest) {
+      const cached = await redis.getCache(cacheKey);
+      if (cached) {
+        return NextResponse.json(cached);
+      }
     }
 
     const mongo = await getMongoDB();
@@ -109,8 +112,15 @@ export async function GET(request: NextRequest) {
       offset,
       limit,
     };
-    await redis.setCache(cacheKey, response, 30);
-    return NextResponse.json(response);
+    if (!isUserScopedRequest) {
+      await redis.setCache(cacheKey, response, 30);
+    }
+
+    return NextResponse.json(response, {
+      headers: isUserScopedRequest
+        ? { 'Cache-Control': 'private, no-store, max-age=0' }
+        : undefined,
+    });
   } catch (error) {
     console.error('Get reviews error:', error);
     return NextResponse.json(

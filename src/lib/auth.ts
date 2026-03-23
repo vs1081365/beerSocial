@@ -178,7 +178,20 @@ export async function loginUser(
 // Criar sessão (Redis Hash)
 async function createSession(user: SessionUser): Promise<void> {
   const redis = await getRedis();
-  const sessionId = `sess_${Date.now()}_${Math.random().toString(36).substr(2, 16)}`;
+  const cookieStore = await cookies();
+  const previousSessionId = cookieStore.get(SESSION_COOKIE)?.value;
+
+  if (previousSessionId) {
+    const previousSessionData = await redis.getSession(previousSessionId);
+
+    if (previousSessionData?.userId) {
+      await redis.deleteCache(`user_session:${previousSessionData.userId}`);
+    }
+
+    await redis.deleteSession(previousSessionId);
+  }
+
+  const sessionId = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 18)}`;
   
   // Guardar sessão no Redis como Hash
   await redis.createSession(sessionId, {
@@ -193,7 +206,6 @@ async function createSession(user: SessionUser): Promise<void> {
   await redis.setCache(`user_session:${user.id}`, sessionId, SESSION_TTL);
   
   // Definir cookie
-  const cookieStore = await cookies();
   cookieStore.set(SESSION_COOKIE, sessionId, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
