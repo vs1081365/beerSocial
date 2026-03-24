@@ -14,6 +14,168 @@ A social network for beer lovers built with **Next.js**, powered by three comple
 
 ---
 
+## Como Executar o Projeto
+
+### 1) Preparar ambiente
+
+Pre-requisitos:
+
+- Node.js 20+
+- npm 10+
+- Docker Desktop (com Docker Compose)
+- Bun (opcional, so necessario para alguns scripts, por exemplo db:seed e start em producao)
+
+Instalacao de dependencias:
+
+1. Na raiz do projeto, instalar dependencias:
+  npm install
+
+Configuracao de ambiente:
+
+1. Garantir que existe um ficheiro env.local na raiz.
+2. Usar estes valores (nomes alinhados com o codigo):
+
+  MONGODB_URL=mongodb://beersocial:beersocial123@localhost:27017/beersocial?authSource=admin
+  MONGODB_DB=beersocial
+  REDIS_URL=redis://localhost:6379
+  CASSANDRA_CONTACT_POINTS=localhost
+  CASSANDRA_DC=datacenter1
+  CASSANDRA_KEYSPACE=beersocial
+  NEXT_PUBLIC_APP_URL=http://localhost:3000
+  NODE_ENV=development
+
+Notas:
+
+- Se MONGODB_URL nao estiver definido, o cliente MongoDB usa o valor default interno.
+- Se CASSANDRA_DC nao estiver definido, o cliente Cassandra usa datacenter1.
+
+### 2) Iniciar servicos (Docker)
+
+1. Arrancar MongoDB, Redis e Cassandra:
+  docker compose up -d
+
+2. Confirmar containers:
+  docker compose ps
+
+3. Ver logs (opcional):
+  docker compose logs -f
+
+4. Iniciar aplicacao:
+  npm run dev
+
+5. Abrir no browser:
+  http://localhost:3000
+
+Parar servicos:
+
+- docker compose down
+
+Reset completo de dados (apaga volumes):
+
+- docker compose down -v
+
+### 3) Executar fluxos obrigatorios
+
+Executar os fluxos abaixo para validar a arquitetura poliglota em funcionamento.
+
+Fluxo A - Autenticacao e sessao (MongoDB + Redis):
+
+1. Registar utilizador em POST /api/auth/register.
+2. Fazer login em POST /api/auth/login.
+3. Confirmar utilizador autenticado em GET /api/auth/me.
+
+Resultado esperado:
+
+- Utilizador persistido no MongoDB.
+- Sessao criada no Redis com TTL.
+
+Fluxo B - Catalogo e reviews (MongoDB + Redis + Cassandra):
+
+1. Criar cerveja em POST /api/beers.
+2. Criar review em POST /api/reviews.
+3. Ler feed em GET /api/reviews e detalhe em GET /api/beers/[id].
+
+Resultado esperado:
+
+- Cerveja e review guardadas no MongoDB (source of truth).
+- Cache Redis invalida/atualiza conforme writes e reads.
+- Cassandra recebe dados derivados (timeline/activity/index) em best effort.
+
+Fluxo C - Interacao social (likes, comentarios, amigos):
+
+1. Comentar review em POST /api/comments.
+2. Dar like em POST /api/likes.
+3. Enviar e aceitar pedido de amizade em POST/PUT /api/friends.
+
+Resultado esperado:
+
+- Comentarios e likes embedded no documento review (MongoDB).
+- Notificacoes persistidas no MongoDB.
+- Publicacao de eventos real-time via Redis Pub/Sub.
+- Relacoes followers/following sincronizadas no Cassandra apos amizade aceite.
+
+Fluxo D - Mensagens e tempo real (Cassandra + Redis + SSE):
+
+1. Enviar mensagem em POST /api/messages.
+2. Abrir stream SSE em GET /api/realtime (user autenticado).
+3. Confirmar entrega em tempo real de eventos notification/message/global.
+
+Resultado esperado:
+
+- Mensagens armazenadas por conversation_id no Cassandra.
+- Metadata de conversas no MongoDB.
+- Eventos em tempo real via Redis Pub/Sub e SSE.
+
+### 4) Correr testes e metricas usados no projeto
+
+Testes/qualidade disponiveis neste repositorio:
+
+1. Lint (qualidade esttica):
+  npm run lint
+
+2. Build de producao (integridade de compilacao):
+  npm run build
+
+3. Health check da arquitetura (metrica operacional):
+  GET /api/status
+
+Validacao recomendada do endpoint /api/status:
+
+- success deve ser true.
+- databases.redis.connected = true
+- databases.mongodb.connected = true
+- databases.cassandra.connected = true
+
+Opcional:
+
+1. Seed de utilizadores para testes manuais:
+  npm run db:seed
+
+2. Teste manual de notificacoes de review:
+  POST /api/status
+
+3. Seed completo (dados de teste para MongoDB + Redis + Cassandra):
+  npm run db:seed:full
+
+4. Limpeza de reviews MongoDB:
+  npm run db:clear:reviews
+
+5. Limpeza de reviews/timeline no Cassandra:
+  npm run db:clear:cassandra-reviews
+
+6. Deduplicacao de cervejas e reconciliacao de artefactos:
+  npm run db:dedupe:beers
+
+7. Carga basica de API (latencia, throughput, taxa de sucesso):
+  npm run load:test
+
+Variaveis opcionais para scripts novos:
+
+- Seed: SEED_USERS, SEED_BEERS, SEED_REVIEWS, SEED_MESSAGES
+- Load test: LOAD_BASE_URL, LOAD_REQUESTS, LOAD_CONCURRENCY, LOAD_TIMEOUT_MS
+
+---
+
 ## MongoDB — Source of Truth
 
 > **Client**: `src/lib/mongodb-client.ts`  
@@ -448,10 +610,13 @@ beersocial-cassandra:  # port 9042  — timelines, messages, counters
 
 ## Running
 
-```bash
-docker compose up -d          # Start all databases
-npm run dev                   # Start Next.js dev server (port 3000)
-```
+Resumo rapido:
+
+1. docker compose up -d
+2. npm run dev
+3. abrir http://localhost:3000
+
+Para instrucoes completas e obrigatorias, seguir a secao 1
 
 ## Tech Stack
 
