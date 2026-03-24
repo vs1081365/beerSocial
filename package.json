@@ -7,7 +7,12 @@
     "build": "next build && xcopy .next\\static .next\\standalone\\.next\\static /E /I /H /Y && xcopy public .next\\standalone\\public /E /I /H /Y",
     "start": "NODE_ENV=production bun .next/standalone/server.js 2>&1 | tee server.log",
     "lint": "eslint .",
-    "db:seed": "bun run scripts/seed-users.ts"
+    "db:seed": "bun run scripts/seed-users.ts",
+    "db:seed:full": "node scripts/seed-full.js",
+    "db:clear:reviews": "node scripts/clear-reviews.js",
+    "db:clear:cassandra-reviews": "node scripts/clear-cassandra-reviews.js",
+    "db:dedupe:beers": "node scripts/dedupe-beers.js",
+    "load:test": "node scripts/load-test.js"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
